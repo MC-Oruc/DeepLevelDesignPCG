@@ -45,8 +45,11 @@ public:
 	ADeepLevelRoadNetworkActor();
 	virtual void OnConstruction(const FTransform& Transform) override;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Road Network", meta = (ClampMin = "1.0", UIMin = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network", meta = (ClampMin = "1.0", UIMin = "1.0"))
 	double GridSize = 500.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Road Network")
+	TSoftObjectPtr<UDeepLevelRoadTileCatalog> Catalog;
 
 	UDeepLevelRoadSplineComponent* CreateRoadBranch();
 	void GetRoadSplineComponents(TArray<UDeepLevelRoadSplineComponent*>& OutSplines) const;
@@ -60,16 +63,16 @@ public:
 	virtual void PostEditUndo() override;
 #endif
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Road Network|Components")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network|Components")
 	TObjectPtr<UDeepLevelRoadNetworkRootComponent> RoadNetworkRoot;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Road Network|Components")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network|Components")
 	TObjectPtr<USceneComponent> RoadLines;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Road Network|Components")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network|Components")
 	TObjectPtr<USceneComponent> GeneratedRoadMeshes;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|PCG|Components")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|PCG|Components")
 	TObjectPtr<UPCGComponent> PCGComponent;
 
 private:
@@ -104,9 +107,6 @@ public:
 	virtual FText GetNodeTooltipText() const override;
 	virtual EPCGSettingsType GetType() const override { return EPCGSettingsType::Spawner; }
 #endif
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings", meta = (PCG_Overridable))
-	TSoftObjectPtr<UDeepLevelRoadTileCatalog> Catalog;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings", meta = (PCG_Overridable))
 	int32 RandomSeed = 1337;
@@ -315,3 +315,4 @@ public:
 		FDeepLevelRoadNetworkPlan& OutPlan,
 		FText& OutError);
 };
+

@@ -9,6 +9,7 @@
 
 
 #include "PCGComponent.h"
+#include "PCGGraph.h"
 #include "PCGManagedResource.h"
 #include "Components/BillboardComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -56,6 +57,13 @@ ADeepLevelRoadNetworkActor::ADeepLevelRoadNetworkActor()
 
 	PCGComponent = CreateDefaultSubobject<UPCGComponent>(TEXT("PCGComponent"));
 	PCGComponent->OnPCGGraphGeneratedDelegate.AddUObject(this, &ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes);
+
+	static ConstructorHelpers::FObjectFinderOptional<UPCGGraphInterface> DefaultGraph(
+		TEXT("/DeepLevelDesignPCG/Road/PCG_DeepLevelRoadNetwork.PCG_DeepLevelRoadNetwork"));
+	if (DefaultGraph.Succeeded())
+	{
+		PCGComponent->SetGraph(DefaultGraph.Get());
+	}
 }
 
 void ADeepLevelRoadNetworkActor::OnConstruction(const FTransform& Transform)
@@ -385,13 +393,6 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 	const UDeepLevelRoadNetworkPCGSettings* Settings = Context->GetInputSettings<UDeepLevelRoadNetworkPCGSettings>();
 	check(Settings);
 
-	UDeepLevelRoadTileCatalog* Catalog = Settings->Catalog.LoadSynchronous();
-	if (!Catalog)
-	{
-		ReportGenerationError(LOCTEXT("MissingCatalog", "DeepLevel Road Network has no valid Road Tile Catalog."), Context);
-		return true;
-	}
-
 	UPCGComponent* SourceComponent = Cast<UPCGComponent>(Context->ExecutionSource.Get());
 	UPCGComponent* OriginalComponent = SourceComponent ? SourceComponent->GetOriginalComponent() : nullptr;
 	const ADeepLevelRoadNetworkActor* Network = OriginalComponent
@@ -401,6 +402,15 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 	{
 		ReportGenerationError(
 			LOCTEXT("InvalidOwner", "DeepLevel Road Network node must run on a DeepLevel Road Network actor."),
+			Context);
+		return true;
+	}
+
+	UDeepLevelRoadTileCatalog* Catalog = Network->Catalog.LoadSynchronous();
+	if (!Catalog)
+	{
+		ReportGenerationError(
+			LOCTEXT("MissingCatalog", "Road Tile Catalog is missing! Please select your Road Network Actor in the level and assign a Catalog in its Details panel."),
 			Context);
 		return true;
 	}
