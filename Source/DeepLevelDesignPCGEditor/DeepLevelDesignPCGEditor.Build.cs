@@ -11,12 +11,25 @@ public class DeepLevelDesignPCGEditor : ModuleRules
         PrivateDependencyModuleNames.AddRange(
             new[]
             {
+                "AdvancedPreviewScene",
+                "AssetRegistry",
+                "AssetTools",
+                "ComponentVisualizers",
+                "ContentBrowser",
                 "Core",
                 "CoreUObject",
                 "DeepLevelDesignPCG",
+                "EditorStyle",
                 "Engine",
+                "InputCore",
+                "LevelEditor",
+                "MessageLog",
+                "PCG",
+                "PropertyEditor",
+                "Slate",
+                "SlateCore",
+                "ToolMenus",
                 "UnrealEd",
             });
     }
 }
-
