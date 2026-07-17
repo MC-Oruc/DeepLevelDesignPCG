@@ -1,0 +1,35 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Deep Level Design PCG",
+  "Description": "Reusable PCG authoring tools for road networks and building lines.",
+  "Category": "Procedural",
+  "CreatedBy": "MC-Oruc",
+  "CreatedByURL": "https://github.com/MC-Oruc",
+  "DocsURL": "https://github.com/MC-Oruc/DeepLevelDesignPCG",
+  "MarketplaceURL": "",
+  "SupportURL": "https://github.com/MC-Oruc/DeepLevelDesignPCG/issues",
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "DeepLevelDesignPCG",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "DeepLevelDesignPCGEditor",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "PCG",
+      "Enabled": true
+    }
+  ]
+}
+
