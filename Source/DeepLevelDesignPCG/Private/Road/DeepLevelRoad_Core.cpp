@@ -62,7 +62,10 @@ ADeepLevelRoadNetworkActor::ADeepLevelRoadNetworkActor()
 		TEXT("/DeepLevelDesignPCG/Road/PCG_DeepLevelRoadNetwork.PCG_DeepLevelRoadNetwork"));
 	if (DefaultGraph.Succeeded())
 	{
-		PCGComponent->SetGraph(DefaultGraph.Get());
+		if (UPCGGraphInstance* GraphInstance = PCGComponent->GetGraphInstance())
+		{
+			GraphInstance->SetGraph(DefaultGraph.Get());
+		}
 	}
 }
 

@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 2,
-  "VersionName": "0.2.0",
+  "Version": 3,
+  "VersionName": "0.2.1",
   "FriendlyName": "Deep Level Design PCG",
   "Description": "Reusable PCG authoring tools for road networks and building lines.",
   "Category": "Procedural",
