@@ -143,6 +143,40 @@ bool FDeepLevelRoadNetworkCrossingTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepLevelRoadNetworkExteriorCornerSidewalkTest,
+	"DeepLevelDesignPCG.Editor.RoadNetwork.ExteriorCornerSidewalk",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelRoadNetworkExteriorCornerSidewalkTest::RunTest(const FString& Parameters)
+{
+	using namespace DeepLevelRoadNetworkPlannerTests;
+	UDeepLevelRoadTileCatalog* Catalog = MakeCatalog();
+	UPCGSplineData* Corner = MakeSpline({
+		FVector(0.0, 0.0, 0.0),
+		FVector(500.0, 0.0, 0.0),
+		FVector(500.0, 500.0, 0.0)});
+	const TArray<const UPCGSplineData*> Splines = {Corner};
+
+	FDeepLevelRoadNetworkPlan Plan;
+	FText Error;
+	TestTrue(TEXT("Corner road network builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
+		*Catalog, Splines, FVector::ZeroVector, 41, Plan, Error));
+
+	TSet<FIntPoint> SidewalkCells;
+	for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
+	{
+		if (Placement.Kind == EDeepLevelRoadTileKind::Sidewalk)
+		{
+			SidewalkCells.Add(Placement.GridCell);
+		}
+	}
+
+	TestTrue(TEXT("Exterior corner near cell is filled"), SidewalkCells.Contains(FIntPoint(2, -1)));
+	TestTrue(TEXT("Exterior corner width is filled"), SidewalkCells.Contains(FIntPoint(3, -2)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDeepLevelRoadTileCatalogValidationTest,
 	"DeepLevelDesignPCG.Editor.RoadNetwork.CatalogValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

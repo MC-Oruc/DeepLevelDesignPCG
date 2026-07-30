@@ -243,6 +243,24 @@ namespace
 					}
 				}
 			}
+
+			if (CountBits(Pair.Value) == 2 && !IsStraight(Pair.Value))
+			{
+				const int32 ExteriorX = (Pair.Value & PositiveX) != 0 ? -1 : 1;
+				const int32 ExteriorY = (Pair.Value & PositiveY) != 0 ? -1 : 1;
+				for (int32 XOffset = 1; XOffset <= Width; ++XOffset)
+				{
+					for (int32 YOffset = 1; YOffset <= Width; ++YOffset)
+					{
+						const FIntPoint Candidate =
+							Pair.Key + FIntPoint(ExteriorX * XOffset, ExteriorY * YOffset);
+						if (!Graph.Connections.Contains(Candidate))
+						{
+							SidewalkCells.Add(Candidate);
+						}
+					}
+				}
+			}
 		}
 		return SidewalkCells;
 	}
