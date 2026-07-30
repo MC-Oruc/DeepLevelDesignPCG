@@ -899,7 +899,7 @@ void SDeepLevelRoadTileCatalogPreviewViewport::ClearPreview()
 	bHasDefinition = false;
 }
 
-AStaticMeshActor* SDeepLevelRoadTileCatalogPreviewViewport::SpawnTile(UStaticMesh* TileMesh)
+AStaticMeshActor* SDeepLevelRoadTileCatalogPreviewViewport::SpawnTile(UStaticMesh* TileMesh, UMaterialInterface* TileMaterialOverride)
 {
 	if (!TileMesh || !PreviewScene.IsValid())
 	{
@@ -911,6 +911,10 @@ AStaticMeshActor* SDeepLevelRoadTileCatalogPreviewViewport::SpawnTile(UStaticMes
 	if (Actor && Actor->GetStaticMeshComponent())
 	{
 		Actor->GetStaticMeshComponent()->SetStaticMesh(TileMesh);
+		if (TileMaterialOverride)
+		{
+			Actor->GetStaticMeshComponent()->SetMaterial(0, TileMaterialOverride);
+		}
 	}
 	return Actor;
 }
@@ -926,7 +930,7 @@ void SDeepLevelRoadTileCatalogPreviewViewport::PreviewTile(const FDeepLevelRoadT
 	}
 	PreviewDefinition = *Definition;
 	bHasDefinition = true;
-	PreviewActor = SpawnTile(Definition->TileMesh.LoadSynchronous());
+	PreviewActor = SpawnTile(Definition->TileMesh.LoadSynchronous(), Definition->TileMaterialOverride.LoadSynchronous());
 	ViewportClient->Invalidate();
 }
 

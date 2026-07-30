@@ -353,6 +353,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::LoadProxy()
 	bLoadingProxy = true;
 	const FDeepLevelRoadTileDefinition& Tile = Catalog->Tiles[SelectedTile];
 	Proxy->TileMesh = Tile.TileMesh;
+	Proxy->TileMaterialOverride = Tile.TileMaterialOverride;
 	Proxy->VolumeCenter = Tile.PlacementVolume.Center;
 	Proxy->VolumeRotation = Tile.PlacementVolume.Rotation;
 	Proxy->VolumeHeight = Tile.PlacementVolume.Extent.Z * 2.0;
@@ -372,6 +373,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::CommitProxy(const FPropertyChangedE
 	ModifyCatalog(LOCTEXT("EditTile", "Edit Road Tile"), [this]
 	{
 		FDeepLevelRoadTileDefinition& Tile = Catalog->Tiles[SelectedTile];
+		Tile.TileMaterialOverride = Proxy->TileMaterialOverride;
 		Tile.PlacementVolume.Center = Proxy->VolumeCenter;
 		Tile.PlacementVolume.Rotation = Proxy->VolumeRotation;
 		Tile.PlacementVolume.Extent = FVector(Catalog->GridCellSize * 0.5, Catalog->GridCellSize * 0.5, FMath::Max(Proxy->VolumeHeight * 0.5, 1.0));

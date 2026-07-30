@@ -380,6 +380,7 @@ namespace
 
 		FDeepLevelRoadTilePlacement& Placement = OutPlan.Placements.Emplace_GetRef();
 		Placement.TileMesh = Candidate.Definition->TileMesh;
+		Placement.TileMaterialOverride = Candidate.Definition->TileMaterialOverride;
 		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, GridOrigin, Catalog.GridCellSize, Candidate.QuarterTurns);
 		Placement.GridCell = Cell;
 		Placement.Kind = EDeepLevelRoadTileKind::Road;
@@ -516,6 +517,7 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 
 		FDeepLevelRoadTilePlacement& Placement = OutPlan.Placements.Emplace_GetRef();
 		Placement.TileMesh = Candidate.Definition->TileMesh;
+		Placement.TileMaterialOverride = Candidate.Definition->TileMaterialOverride;
 		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, GridOrigin, Catalog.GridCellSize, Candidate.QuarterTurns);
 		Placement.GridCell = Cell;
 		Placement.Kind = EDeepLevelRoadTileKind::Sidewalk;

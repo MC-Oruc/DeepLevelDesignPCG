@@ -141,6 +141,9 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "Tile")
 	TSoftObjectPtr<UStaticMesh> TileMesh;
 
+	UPROPERTY(EditAnywhere, Category = "Tile")
+	TSoftObjectPtr<UMaterialInterface> TileMaterialOverride;
+
 	UPROPERTY(EditAnywhere, Category = "Placement Volume")
 	FVector VolumeCenter = FVector::ZeroVector;
 
@@ -219,6 +222,7 @@ private:
 class AStaticMeshActor;
 class FDeepLevelRoadTileCatalogEditorToolkit;
 class UStaticMesh;
+class UMaterialInterface;
 
 struct HDeepLevelRoadConnectionProxy final : public HHitProxy
 {
@@ -268,7 +272,7 @@ protected:
 
 private:
 	void ClearPreview();
-	AStaticMeshActor* SpawnTile(UStaticMesh* TileMesh);
+	AStaticMeshActor* SpawnTile(UStaticMesh* TileMesh, UMaterialInterface* TileMaterialOverride);
 
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	TSharedPtr<FDeepLevelRoadTileCatalogViewportClient> ViewportClient;

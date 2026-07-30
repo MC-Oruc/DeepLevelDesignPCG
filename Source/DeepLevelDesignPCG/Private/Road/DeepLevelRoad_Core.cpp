@@ -464,11 +464,13 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 	UPCGMetadata* Metadata = OutputData->MutableMetadata();
 	FPCGMetadataAttribute<FSoftObjectPath>* MeshAttribute = Metadata->CreateAttribute<FSoftObjectPath>(
 		Settings->MeshAttribute, FSoftObjectPath(), false, false);
+	FPCGMetadataAttribute<FSoftObjectPath>* MaterialOverrideAttribute = Metadata->CreateAttribute<FSoftObjectPath>(
+		Settings->MaterialOverrideAttribute, FSoftObjectPath(), false, false);
 	FPCGMetadataAttribute<int32>* KindAttribute = Metadata->CreateAttribute<int32>(
 		Settings->TileKindAttribute, 0, false, false);
 	FPCGMetadataAttribute<int32>* ConnectionsAttribute = Metadata->CreateAttribute<int32>(
 		Settings->ConnectionMaskAttribute, 0, false, false);
-	if (!MeshAttribute || !KindAttribute || !ConnectionsAttribute)
+	if (!MeshAttribute || !MaterialOverrideAttribute || !KindAttribute || !ConnectionsAttribute)
 	{
 		ReportGenerationError(LOCTEXT("MetadataFailure", "DeepLevel Road Network could not create its output attributes."), Context);
 		return true;
@@ -484,6 +486,7 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 		Point.Seed = HashCombineFast(Settings->RandomSeed, HashCombineFast(GetTypeHash(Placement.GridCell.X), GetTypeHash(Placement.GridCell.Y)));
 		Point.MetadataEntry = Metadata->AddEntry();
 		MeshAttribute->SetValue(Point.MetadataEntry, Placement.TileMesh.ToSoftObjectPath());
+		MaterialOverrideAttribute->SetValue(Point.MetadataEntry, Placement.TileMaterialOverride.ToSoftObjectPath());
 		KindAttribute->SetValue(Point.MetadataEntry, static_cast<int32>(Placement.Kind));
 		ConnectionsAttribute->SetValue(Point.MetadataEntry, Placement.ConnectionMask);
 	}

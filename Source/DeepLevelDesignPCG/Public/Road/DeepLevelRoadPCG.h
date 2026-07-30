@@ -18,6 +18,7 @@ class UPCGComponent;
 class UBillboardComponent;
 class UDeepLevelRoadSplineComponent;
 class ADeepLevelRoadNetworkActor;
+class UMaterialInterface;
 
 enum class EDeepLevelRoadNetworkChange : uint8
 {
@@ -115,6 +116,9 @@ public:
 	FName MeshAttribute = TEXT("Mesh");
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Output")
+	FName MaterialOverrideAttribute = TEXT("TileMaterialOverride");
+
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Output")
 	FName TileKindAttribute = TEXT("RoadTileKind");
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Output")
@@ -208,6 +212,10 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelRoadTileDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile")
 	TSoftObjectPtr<UStaticMesh> TileMesh;
 
+	/** Optional material override exposed to the downstream PCG Static Mesh Spawner. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile")
+	TSoftObjectPtr<UMaterialInterface> TileMaterialOverride;
+
 	/** Zero means sidewalk; any connected grid edge means road. Authored through the catalog viewport. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Connectivity", meta = (Bitmask, BitmaskEnum = "/Script/DeepLevelDesignPCG.EDeepLevelRoadConnection"))
 	int32 ConnectionMask = 0;
@@ -289,6 +297,7 @@ class UPCGSplineData;
 struct FDeepLevelRoadTilePlacement
 {
 	TSoftObjectPtr<UStaticMesh> TileMesh;
+	TSoftObjectPtr<UMaterialInterface> TileMaterialOverride;
 	FTransform Transform = FTransform::Identity;
 	FIntPoint GridCell = FIntPoint::ZeroValue;
 	EDeepLevelRoadTileKind Kind = EDeepLevelRoadTileKind::Road;
