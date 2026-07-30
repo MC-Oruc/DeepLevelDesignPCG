@@ -251,25 +251,36 @@ bool FDeepLevelRoadSplineComponentVisualizer::UpdateHoveredCell()
 
 	FLevelEditorViewportClient& ViewportClient = LevelViewport->GetLevelViewportClient();
 	const FViewportCursorLocation Cursor = ViewportClient.GetCursorWorldLocationFromMousePos();
-	const FVector Direction = Cursor.GetDirection();
-	if (FMath::IsNearlyZero(Direction.Z))
+	const ELevelViewportType ViewportType = ViewportClient.GetViewportType();
+	FVector CursorOnRoadPlane;
+	if (ViewportType == LVT_OrthoXY || ViewportType == LVT_OrthoNegativeXY)
 	{
-		bHasHoveredCell = false;
-		HoveredNetwork.Reset();
-		return false;
+		CursorOnRoadPlane = Cursor.GetOrigin();
+		CursorOnRoadPlane.Z = Network->GetActorLocation().Z;
 	}
-
-	const double Distance = (Network->GetActorLocation().Z - Cursor.GetOrigin().Z) / Direction.Z;
-	if (Distance < 0.0)
+	else
 	{
-		bHasHoveredCell = false;
-		HoveredNetwork.Reset();
-		return false;
+		const FVector Direction = Cursor.GetDirection();
+		if (FMath::IsNearlyZero(Direction.Z))
+		{
+			bHasHoveredCell = false;
+			HoveredNetwork.Reset();
+			return false;
+		}
+
+		const double Distance = (Network->GetActorLocation().Z - Cursor.GetOrigin().Z) / Direction.Z;
+		if (Distance < 0.0)
+		{
+			bHasHoveredCell = false;
+			HoveredNetwork.Reset();
+			return false;
+		}
+		CursorOnRoadPlane = Cursor.GetOrigin() + Direction * Distance;
 	}
 
 	const FVector GridOrigin = Network->GetGridOrigin();
 	const FVector NewHoveredCell = SnapWorldToGrid(
-		Cursor.GetOrigin() + Direction * Distance,
+		CursorOnRoadPlane,
 		GridOrigin,
 		Network->GridSize);
 	const bool bChanged = !bHasHoveredCell
