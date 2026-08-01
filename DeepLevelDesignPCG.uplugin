@@ -10,6 +10,7 @@
   "DocsURL": "https://github.com/MC-Oruc/DeepLevelDesignPCG",
   "MarketplaceURL": "",
   "SupportURL": "https://github.com/MC-Oruc/DeepLevelDesignPCG/issues",
+  "EngineVersion": "5.7.0",
   "CanContainContent": true,
   "IsBetaVersion": true,
   "Installed": false,
