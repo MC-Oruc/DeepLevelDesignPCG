@@ -244,7 +244,7 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelRoadTileDefinition
 		{
 			return EDeepLevelRoadTileTopology::Invalid;
 		}
-		const int32 ConnectionCount = FMath::CountBits(static_cast<uint64>(ConnectionMask));
+		const int32 ConnectionCount = FMath::CountBits64(static_cast<uint64>(ConnectionMask));
 		switch (ConnectionCount)
 		{
 		case 0: return EDeepLevelRoadTileTopology::Sidewalk;

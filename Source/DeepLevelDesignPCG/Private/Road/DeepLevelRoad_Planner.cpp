@@ -36,7 +36,7 @@ namespace
 
 	int32 CountBits(const int32 Mask)
 	{
-		return FMath::CountBits(static_cast<uint64>(Mask));
+		return FMath::CountBits64(static_cast<uint64>(Mask));
 	}
 
 	bool IsStraight(const int32 Mask)
