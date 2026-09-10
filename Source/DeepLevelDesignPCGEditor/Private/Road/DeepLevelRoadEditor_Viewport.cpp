@@ -8,11 +8,14 @@
 #include "EditorViewportClient.h"
 #include "CanvasItem.h"
 #include "CanvasTypes.h"
+#include "ContentBrowserModule.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "InputCoreTypes.h"
 #include "LevelEditor.h"
+#include "Modules/ModuleManager.h"
 #include "SLevelViewport.h"
 #include "SceneManagement.h"
 #include "SceneView.h"
@@ -115,6 +118,32 @@ namespace
 			Current.X = bMovesInX && FMath::Abs(End.X - Current.X) < GridSize ? End.X : Current.X;
 			Current.Y = bMovesInY && FMath::Abs(End.Y - Current.Y) < GridSize ? End.Y : Current.Y;
 			OutPath.Add(Current);
+		}
+	}
+
+	TSoftObjectPtr<UStaticMesh> GetSelectedStaticMesh()
+	{
+		FContentBrowserModule& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+		TArray<FAssetData> SelectedAssets;
+		ContentBrowser.Get().GetSelectedAssets(SelectedAssets);
+		for (const FAssetData& Asset : SelectedAssets)
+		{
+			if (Asset.AssetClassPath == UStaticMesh::StaticClass()->GetClassPathName())
+			{
+				return TSoftObjectPtr<UStaticMesh>(Asset.GetSoftObjectPath());
+			}
+		}
+		return nullptr;
+	}
+
+	void ShowOverrideNotification(const FText& Message, const SNotificationItem::ECompletionState State)
+	{
+		FNotificationInfo Info(Message);
+		Info.bFireAndForget = true;
+		Info.ExpireDuration = 4.0f;
+		if (const TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info))
+		{
+			Notification->SetCompletionState(State);
 		}
 	}
 }
@@ -494,13 +523,43 @@ void FDeepLevelRoadSplineComponentVisualizer::DrawVisualization(
 
 	const UDeepLevelRoadNetworkRootComponent* Root = Cast<UDeepLevelRoadNetworkRootComponent>(Component);
 	const ADeepLevelRoadNetworkActor* Network = Root ? Root->GetOwner<ADeepLevelRoadNetworkActor>() : nullptr;
-	if (!Root || !Network || !PDI || !bHasHoveredCell || HoveredNetwork.Get() != Network)
+	if (!Root || !Network || !PDI)
 	{
 		return;
 	}
 
 	const double HalfGrid = Network->GridSize * 0.5;
 	const double Height = Network->GetActorLocation().Z + 8.0;
+	for (const FDeepLevelRoadCellOverride& Override : Network->CellOverrides)
+	{
+		const FVector Center = Network->GetGridOrigin()
+			+ FVector(Override.GridCell.X * Network->GridSize, Override.GridCell.Y * Network->GridSize, 12.0);
+		const FVector OverrideCorners[] = {
+			FVector(Center.X - HalfGrid, Center.Y - HalfGrid, Center.Z),
+			FVector(Center.X + HalfGrid, Center.Y - HalfGrid, Center.Z),
+			FVector(Center.X + HalfGrid, Center.Y + HalfGrid, Center.Z),
+			FVector(Center.X - HalfGrid, Center.Y + HalfGrid, Center.Z)};
+		const FLinearColor Color = Override.Mode == EDeepLevelRoadCellOverrideMode::Remove
+			? FLinearColor::Red
+			: Override.Mode == EDeepLevelRoadCellOverrideMode::Add
+				? FLinearColor::Green
+				: FLinearColor(1.0f, 0.55f, 0.0f);
+		for (int32 CornerIndex = 0; CornerIndex < 4; ++CornerIndex)
+		{
+			PDI->DrawLine(OverrideCorners[CornerIndex], OverrideCorners[(CornerIndex + 1) % 4], Color, SDPG_Foreground, 4.0f);
+		}
+		if (Override.Mode == EDeepLevelRoadCellOverrideMode::Remove)
+		{
+			PDI->DrawLine(OverrideCorners[0], OverrideCorners[2], Color, SDPG_Foreground, 5.0f);
+			PDI->DrawLine(OverrideCorners[1], OverrideCorners[3], Color, SDPG_Foreground, 5.0f);
+		}
+	}
+
+	if (!bHasHoveredCell || HoveredNetwork.Get() != Network)
+	{
+		return;
+	}
+
 	const FVector Corners[] = {
 		FVector(HoveredCell.X - HalfGrid, HoveredCell.Y - HalfGrid, Height),
 		FVector(HoveredCell.X + HalfGrid, HoveredCell.Y - HalfGrid, Height),
@@ -566,6 +625,34 @@ void FDeepLevelRoadSplineComponentVisualizer::DrawVisualizationHUD(
 	Hint.EnableShadow(FLinearColor::Black);
 	Canvas->DrawItem(Hint);
 
+	FCanvasTextItem OverrideHint(
+		FVector2D(24.0, 68.0),
+		LOCTEXT("RoadOverrideHint", "Shift + Right Click: Exclude / Restore | Ctrl + Shift + Left: Modify"),
+		GEngine->GetSmallFont(),
+		FLinearColor(1.0f, 0.75f, 0.45f));
+	OverrideHint.EnableShadow(FLinearColor::Black);
+	Canvas->DrawItem(OverrideHint);
+
+	if (bHasHoveredCell && HoveredNetwork.Get() == Network)
+	{
+		const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+		FCanvasTextItem CellLabel(
+			FVector2D(24.0, 108.0),
+			FText::Format(LOCTEXT("HoveredRoadCell", "Grid Cell: {0}, {1}"), FText::AsNumber(Cell.X), FText::AsNumber(Cell.Y)),
+			GEngine->GetSmallFont(),
+			FLinearColor::White);
+		CellLabel.EnableShadow(FLinearColor::Black);
+		Canvas->DrawItem(CellLabel);
+	}
+
+	FCanvasTextItem AddHint(
+		FVector2D(24.0, 88.0),
+		LOCTEXT("RoadOverrideAddHint", "Ctrl + Shift + Right: Add Selected Mesh | Middle: Clear Override"),
+		GEngine->GetSmallFont(),
+		FLinearColor(1.0f, 0.75f, 0.45f));
+	AddHint.EnableShadow(FLinearColor::Black);
+	Canvas->DrawItem(AddHint);
+
 	FVector2D ScreenPosition;
 	if (View->WorldToPixel(Network->GetActorLocation(), ScreenPosition))
 	{
@@ -611,8 +698,32 @@ bool FDeepLevelRoadSplineComponentVisualizer::HandleMouseButtonDownEvent(
 	FSlateApplication&,
 	const FPointerEvent& MouseEvent)
 {
+	if (!bDragging && MouseEvent.IsShiftDown() && UpdateHoveredCell())
+	{
+		if (MouseEvent.IsControlDown())
+		{
+			if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+			{
+				return SetHoveredCellOverride(EDeepLevelRoadCellOverrideMode::Modify, false);
+			}
+			if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+			{
+				return SetHoveredCellOverride(EDeepLevelRoadCellOverrideMode::Add, true);
+			}
+			if (MouseEvent.GetEffectingButton() == EKeys::MiddleMouseButton)
+			{
+				return ClearHoveredCellOverride();
+			}
+		}
+		else if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+		{
+			return ToggleHoveredCellRemoval();
+		}
+	}
+
 	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton
 		|| !MouseEvent.IsShiftDown()
+		|| MouseEvent.IsControlDown()
 		|| bDragging
 		|| !UpdateHoveredCell())
 	{
@@ -654,6 +765,133 @@ bool FDeepLevelRoadSplineComponentVisualizer::HandleMouseButtonDownEvent(
 		GCurrentLevelEditingViewportClient->Viewport->CaptureMouse(true);
 	}
 	ApplyDrag();
+	return true;
+}
+
+bool FDeepLevelRoadSplineComponentVisualizer::ToggleHoveredCellRemoval()
+{
+	ADeepLevelRoadNetworkActor* Network = HoveredNetwork.Get();
+	if (!Network || !bHasHoveredCell)
+	{
+		return false;
+	}
+
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
+	{
+		return Override.GridCell == Cell;
+	});
+	if (ExistingIndex != INDEX_NONE
+		&& Network->CellOverrides[ExistingIndex].Mode != EDeepLevelRoadCellOverrideMode::Remove)
+	{
+		ShowOverrideNotification(
+			LOCTEXT("OverrideAlreadyAuthored", "This cell already has a Modify or Add override. Clear it first or edit it in Details."),
+			SNotificationItem::CS_Fail);
+		return true;
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT("ToggleRoadCellRemoval", "Toggle Road Cell Exclusion"));
+	Network->Modify();
+	if (ExistingIndex == INDEX_NONE)
+	{
+		FDeepLevelRoadCellOverride& Override = Network->CellOverrides.Emplace_GetRef();
+		Override.GridCell = Cell;
+		Override.Mode = EDeepLevelRoadCellOverrideMode::Remove;
+	}
+	else
+	{
+		Network->CellOverrides.RemoveAt(ExistingIndex);
+	}
+	Network->MarkPackageDirty();
+	Network->NotifyRoadNetworkChanged();
+	if (GCurrentLevelEditingViewportClient)
+	{
+		GCurrentLevelEditingViewportClient->Invalidate();
+	}
+	return true;
+}
+
+bool FDeepLevelRoadSplineComponentVisualizer::SetHoveredCellOverride(
+	const EDeepLevelRoadCellOverrideMode Mode,
+	const bool bRequireSelectedMesh)
+{
+	ADeepLevelRoadNetworkActor* Network = HoveredNetwork.Get();
+	if (!Network || !bHasHoveredCell)
+	{
+		return false;
+	}
+
+	const TSoftObjectPtr<UStaticMesh> SelectedMesh = GetSelectedStaticMesh();
+	if (bRequireSelectedMesh && SelectedMesh.IsNull())
+	{
+		ShowOverrideNotification(
+			LOCTEXT("RoadOverrideMeshRequired", "Select one Static Mesh in the Content Browser before adding a cell."),
+			SNotificationItem::CS_Fail);
+		return true;
+	}
+
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
+	{
+		return Override.GridCell == Cell;
+	});
+	if (ExistingIndex != INDEX_NONE && Network->CellOverrides[ExistingIndex].Mode != Mode)
+	{
+		ShowOverrideNotification(
+			LOCTEXT("RoadOverrideModeConflict", "This cell has a different override mode. Clear it first."),
+			SNotificationItem::CS_Fail);
+		return true;
+	}
+
+	const FScopedTransaction Transaction(Mode == EDeepLevelRoadCellOverrideMode::Add
+		? LOCTEXT("AddRoadCellOverride", "Add Road Cell Override")
+		: LOCTEXT("ModifyRoadCellOverride", "Modify Road Cell Override"));
+	Network->Modify();
+	FDeepLevelRoadCellOverride* Override = ExistingIndex == INDEX_NONE
+		? &Network->CellOverrides.Emplace_GetRef()
+		: &Network->CellOverrides[ExistingIndex];
+	Override->GridCell = Cell;
+	Override->Mode = Mode;
+	if (!SelectedMesh.IsNull())
+	{
+		Override->ReplacementMesh = SelectedMesh;
+	}
+	Network->MarkPackageDirty();
+	Network->NotifyRoadNetworkChanged();
+	if (GCurrentLevelEditingViewportClient)
+	{
+		GCurrentLevelEditingViewportClient->Invalidate();
+	}
+	return true;
+}
+
+bool FDeepLevelRoadSplineComponentVisualizer::ClearHoveredCellOverride()
+{
+	ADeepLevelRoadNetworkActor* Network = HoveredNetwork.Get();
+	if (!Network || !bHasHoveredCell)
+	{
+		return false;
+	}
+
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
+	{
+		return Override.GridCell == Cell;
+	});
+	if (ExistingIndex == INDEX_NONE)
+	{
+		return true;
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT("ClearRoadCellOverride", "Clear Road Cell Override"));
+	Network->Modify();
+	Network->CellOverrides.RemoveAt(ExistingIndex);
+	Network->MarkPackageDirty();
+	Network->NotifyRoadNetworkChanged();
+	if (GCurrentLevelEditingViewportClient)
+	{
+		GCurrentLevelEditingViewportClient->Invalidate();
+	}
 	return true;
 }
 

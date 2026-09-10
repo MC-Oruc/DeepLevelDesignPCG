@@ -91,6 +91,9 @@ private:
 	void BuildReplacementPath(TArray<FVector>& OutPath) const;
 	bool DoesDragPathOverlapExistingRoad() const;
 	void ShowOverlapWarning() const;
+	bool ToggleHoveredCellRemoval();
+	bool SetHoveredCellOverride(EDeepLevelRoadCellOverrideMode Mode, bool bRequireSelectedMesh);
+	bool ClearHoveredCellOverride();
 	void ApplyDrag();
 	void FinishDrag();
 	void ResetDrag();

@@ -414,6 +414,118 @@ namespace
 			return A.X == B.X ? A.Y < B.Y : A.X < B.X;
 		});
 	}
+
+	bool ApplyCellOverrides(
+		const TConstArrayView<FDeepLevelRoadCellOverride> Overrides,
+		const FVector& GridOrigin,
+		const double GridSize,
+		FDeepLevelRoadNetworkPlan& Plan,
+		FText& OutError)
+	{
+		TSet<FIntPoint> AuthoredCells;
+		for (const FDeepLevelRoadCellOverride& Override : Overrides)
+		{
+			if (AuthoredCells.Contains(Override.GridCell))
+			{
+				OutError = FText::Format(
+					LOCTEXT("DuplicateCellOverride", "Road Network has more than one Local Override for grid cell ({0}, {1})."),
+					FText::AsNumber(Override.GridCell.X),
+					FText::AsNumber(Override.GridCell.Y));
+				return false;
+			}
+			AuthoredCells.Add(Override.GridCell);
+
+			const int32 PlacementIndex = Plan.Placements.IndexOfByPredicate([&Override](const FDeepLevelRoadTilePlacement& Placement)
+			{
+				return Placement.GridCell == Override.GridCell;
+			});
+
+			if (Override.Mode == EDeepLevelRoadCellOverrideMode::Remove)
+			{
+				if (PlacementIndex == INDEX_NONE)
+				{
+					OutError = FText::Format(
+						LOCTEXT("MissingRemovedCell", "Local Override cannot remove empty grid cell ({0}, {1})."),
+						FText::AsNumber(Override.GridCell.X),
+						FText::AsNumber(Override.GridCell.Y));
+					return false;
+				}
+				Plan.Placements.RemoveAt(PlacementIndex);
+				continue;
+			}
+
+			if (Override.LocalOffset.ContainsNaN()
+				|| Override.RotationOffset.ContainsNaN()
+				|| Override.ScaleMultiplier.ContainsNaN()
+				|| FMath::IsNearlyZero(Override.ScaleMultiplier.X)
+				|| FMath::IsNearlyZero(Override.ScaleMultiplier.Y)
+				|| FMath::IsNearlyZero(Override.ScaleMultiplier.Z))
+			{
+				OutError = FText::Format(
+					LOCTEXT("InvalidOverrideTransform", "Local Override at grid cell ({0}, {1}) has an invalid transform."),
+					FText::AsNumber(Override.GridCell.X),
+					FText::AsNumber(Override.GridCell.Y));
+				return false;
+			}
+
+			FDeepLevelRoadTilePlacement* Placement = PlacementIndex == INDEX_NONE ? nullptr : &Plan.Placements[PlacementIndex];
+			if (Override.Mode == EDeepLevelRoadCellOverrideMode::Modify && !Placement)
+			{
+				OutError = FText::Format(
+					LOCTEXT("MissingModifiedCell", "Local Override cannot modify empty grid cell ({0}, {1}). Use Add instead."),
+					FText::AsNumber(Override.GridCell.X),
+					FText::AsNumber(Override.GridCell.Y));
+				return false;
+			}
+			if (Override.Mode == EDeepLevelRoadCellOverrideMode::Add)
+			{
+				if (Placement)
+				{
+					OutError = FText::Format(
+						LOCTEXT("OccupiedAddedCell", "Local Override cannot add to occupied grid cell ({0}, {1}). Use Modify instead."),
+						FText::AsNumber(Override.GridCell.X),
+						FText::AsNumber(Override.GridCell.Y));
+					return false;
+				}
+				if (Override.ReplacementMesh.IsNull())
+				{
+					OutError = FText::Format(
+						LOCTEXT("MissingAddedMesh", "Local Override Add at grid cell ({0}, {1}) requires a mesh."),
+						FText::AsNumber(Override.GridCell.X),
+						FText::AsNumber(Override.GridCell.Y));
+					return false;
+				}
+
+				Placement = &Plan.Placements.Emplace_GetRef();
+				Placement->GridCell = Override.GridCell;
+				Placement->Kind = Override.AddedTileKind;
+				Placement->Transform.SetLocation(GridOrigin + FVector(Override.GridCell.X * GridSize, Override.GridCell.Y * GridSize, 0.0));
+			}
+
+			if (!Override.ReplacementMesh.IsNull())
+			{
+				Placement->TileMesh = Override.ReplacementMesh;
+			}
+			if (Override.bOverrideMaterial)
+			{
+				Placement->TileMaterialOverride = Override.MaterialOverride;
+			}
+
+			FTransform& Transform = Placement->Transform;
+			Transform.AddToTranslation(Transform.TransformVectorNoScale(Override.LocalOffset));
+			Transform.ConcatenateRotation(Override.RotationOffset.Quaternion());
+			Transform.SetScale3D(Transform.GetScale3D() * Override.ScaleMultiplier);
+			Transform.NormalizeRotation();
+		}
+
+		Plan.RoadCellCount = 0;
+		for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
+		{
+			Plan.RoadCellCount += Placement.Kind == EDeepLevelRoadTileKind::Road ? 1 : 0;
+		}
+		Plan.SidewalkCellCount = Plan.Placements.Num() - Plan.RoadCellCount;
+		return true;
+	}
 }
 
 bool FDeepLevelRoadNetworkPlanner::BuildPlan(
@@ -422,7 +534,8 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 	const FVector& GridOrigin,
 	const int32 Seed,
 	FDeepLevelRoadNetworkPlan& OutPlan,
-	FText& OutError)
+	FText& OutError,
+	const TConstArrayView<FDeepLevelRoadCellOverride> CellOverrides)
 {
 	OutPlan = {};
 	OutError = FText::GetEmpty();
@@ -541,7 +654,7 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 		Placement.Kind = EDeepLevelRoadTileKind::Sidewalk;
 	}
 	OutPlan.SidewalkCellCount = SidewalkPlacements.Num();
-	return true;
+	return ApplyCellOverrides(CellOverrides, GridOrigin, Catalog.GridCellSize, OutPlan, OutError);
 }
 
 #undef LOCTEXT_NAMESPACE

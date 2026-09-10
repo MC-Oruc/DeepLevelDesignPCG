@@ -20,6 +20,58 @@ class UBillboardComponent;
 class UDeepLevelRoadSplineComponent;
 class ADeepLevelRoadNetworkActor;
 class UMaterialInterface;
+class UStaticMesh;
+
+UENUM(BlueprintType)
+enum class EDeepLevelRoadTileKind : uint8
+{
+	Road,
+	Sidewalk
+};
+
+UENUM(BlueprintType)
+enum class EDeepLevelRoadCellOverrideMode : uint8
+{
+	Remove,
+	Modify,
+	Add
+};
+
+/** Persistent final-placement edit for one Road Network grid cell. */
+USTRUCT(BlueprintType)
+struct DEEPLEVELDESIGNPCG_API FDeepLevelRoadCellOverride
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cell")
+	FIntPoint GridCell = FIntPoint::ZeroValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cell")
+	EDeepLevelRoadCellOverrideMode Mode = EDeepLevelRoadCellOverrideMode::Modify;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Placement", meta = (EditCondition = "Mode == EDeepLevelRoadCellOverrideMode::Add"))
+	EDeepLevelRoadTileKind AddedTileKind = EDeepLevelRoadTileKind::Sidewalk;
+
+	/** Optional for Modify; required for Add. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Placement", meta = (EditCondition = "Mode != EDeepLevelRoadCellOverrideMode::Remove"))
+	TSoftObjectPtr<UStaticMesh> ReplacementMesh;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Placement", meta = (EditCondition = "Mode != EDeepLevelRoadCellOverrideMode::Remove"))
+	bool bOverrideMaterial = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Placement", meta = (EditCondition = "bOverrideMaterial && Mode != EDeepLevelRoadCellOverrideMode::Remove", EditConditionHides))
+	TSoftObjectPtr<UMaterialInterface> MaterialOverride;
+
+	/** Offset in the tile's local axes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Transform", meta = (EditCondition = "Mode != EDeepLevelRoadCellOverrideMode::Remove"))
+	FVector LocalOffset = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Transform", meta = (EditCondition = "Mode != EDeepLevelRoadCellOverrideMode::Remove"))
+	FRotator RotationOffset = FRotator::ZeroRotator;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Transform", meta = (EditCondition = "Mode != EDeepLevelRoadCellOverrideMode::Remove"))
+	FVector ScaleMultiplier = FVector::OneVector;
+};
 
 enum class EDeepLevelRoadNetworkChange : uint8
 {
@@ -55,6 +107,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Road Collision")
 	FCollisionProfileName RoadMeshCollisionProfile = UCollisionProfile::BlockAll_ProfileName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Local Overrides", meta = (TitleProperty = "GridCell"))
+	TArray<FDeepLevelRoadCellOverride> CellOverrides;
 
 	UDeepLevelRoadSplineComponent* CreateRoadBranch();
 	void GetRoadSplineComponents(TArray<UDeepLevelRoadSplineComponent*>& OutSplines) const;
@@ -162,8 +217,6 @@ public:
 
 
 
-class UStaticMesh;
-
 UENUM(BlueprintType, meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
 enum class EDeepLevelRoadConnection : uint8
 {
@@ -174,13 +227,6 @@ enum class EDeepLevelRoadConnection : uint8
 	NegativeY = 1 << 3
 };
 ENUM_CLASS_FLAGS(EDeepLevelRoadConnection)
-
-UENUM(BlueprintType)
-enum class EDeepLevelRoadTileKind : uint8
-{
-	Road,
-	Sidewalk
-};
 
 enum class EDeepLevelRoadTileTopology : uint8
 {
@@ -326,5 +372,6 @@ public:
 		const FVector& GridOrigin,
 		int32 Seed,
 		FDeepLevelRoadNetworkPlan& OutPlan,
-		FText& OutError);
+		FText& OutError,
+		TConstArrayView<FDeepLevelRoadCellOverride> CellOverrides = {});
 };

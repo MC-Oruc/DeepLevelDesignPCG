@@ -463,7 +463,8 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 		Network->GetGridOrigin(),
 		Settings->RandomSeed,
 		Plan,
-		Error))
+		Error,
+		Network->CellOverrides))
 	{
 		ReportGenerationError(Error, Context);
 		return true;

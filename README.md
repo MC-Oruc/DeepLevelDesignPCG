@@ -32,6 +32,16 @@ The shipped graphs intentionally have no catalog assigned.
 
 Catalogs are project data. They contain mesh/class references, placement volumes, exposure rules, connectivity, weights, and calibration state; they are not copied into the plugin.
 
+## Local Road Overrides
+
+Road Network actors own persistent, grid-cell overrides for final placement corrections. Overrides survive PCG cleanup and regeneration.
+
+- `Remove` suppresses the generated placement in one occupied cell.
+- `Modify` keeps the generated placement and can replace its mesh or material and apply a local transform adjustment.
+- `Add` creates an explicit road or sidewalk placement in an empty cell and requires a mesh.
+
+Select a Road Network to see hovered grid coordinates and authored override outlines in the level viewport. `Shift + Left Drag` keeps drawing or reshaping roads. Use `Shift + Right Click` to exclude or restore a cell, `Ctrl + Shift + Left Click` to create or update a Modify override, `Ctrl + Shift + Right Click` to add the Static Mesh selected in the Content Browser, and `Ctrl + Shift + Middle Click` to clear any override. Edit complete `Modify` and `Add` values under **Local Overrides** in the actor Details panel. Red outlines are removed cells, orange outlines are modified cells, and green outlines are added cells. Duplicate overrides and operations targeting the wrong occupancy state fail generation with an actionable error instead of being silently ignored.
+
 ## Module Boundaries
 
 - `DeepLevelDesignPCG`: runtime actors, catalogs, planners, solvers, PCG nodes, and deterministic tests.

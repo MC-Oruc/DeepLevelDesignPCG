@@ -398,4 +398,93 @@ bool FDeepLevelRoadWideIntersectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepLevelRoadCellOverrideTest,
+	"DeepLevelDesignPCG.Editor.RoadNetwork.CellOverrides",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelRoadCellOverrideTest::RunTest(const FString& Parameters)
+{
+	using namespace DeepLevelRoadNetworkPlannerTests;
+	UDeepLevelRoadTileCatalog* Catalog = MakeCatalog();
+	const TArray<const UPCGSplineData*> Splines = {
+		MakeSpline(FVector::ZeroVector, FVector(1000.0, 0.0, 0.0))};
+	FText Error;
+	FDeepLevelRoadNetworkPlan BasePlan;
+	TestTrue(TEXT("Base road network builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
+		*Catalog, Splines, FVector::ZeroVector, 41, BasePlan, Error));
+
+	FDeepLevelRoadCellOverride Modify;
+	Modify.GridCell = FIntPoint::ZeroValue;
+	Modify.Mode = EDeepLevelRoadCellOverrideMode::Modify;
+	Modify.LocalOffset = FVector(0.0, 0.0, 25.0);
+	Modify.RotationOffset = FRotator(0.0, 15.0, 0.0);
+	Modify.ScaleMultiplier = FVector(1.1, 1.1, 1.0);
+
+	FDeepLevelRoadCellOverride Remove;
+	Remove.GridCell = FIntPoint(0, 1);
+	Remove.Mode = EDeepLevelRoadCellOverrideMode::Remove;
+
+	FDeepLevelRoadCellOverride Add;
+	Add.GridCell = FIntPoint(10, 10);
+	Add.Mode = EDeepLevelRoadCellOverrideMode::Add;
+	Add.AddedTileKind = EDeepLevelRoadTileKind::Sidewalk;
+	Add.ReplacementMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	const TArray<FDeepLevelRoadCellOverride> Overrides = {Modify, Remove, Add};
+
+	FDeepLevelRoadNetworkPlan OverridePlan;
+	TestTrue(TEXT("Road network with final-placement overrides builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
+		*Catalog, Splines, FVector::ZeroVector, 41, OverridePlan, Error, Overrides));
+	TestEqual(TEXT("Remove and Add preserve total placement count"), OverridePlan.Placements.Num(), BasePlan.Placements.Num());
+	TestFalse(TEXT("Removed cell has no placement"), OverridePlan.Placements.ContainsByPredicate([](const FDeepLevelRoadTilePlacement& Placement)
+	{
+		return Placement.GridCell == FIntPoint(0, 1);
+	}));
+
+	const FDeepLevelRoadTilePlacement* ModifiedPlacement = OverridePlan.Placements.FindByPredicate([](const FDeepLevelRoadTilePlacement& Placement)
+	{
+		return Placement.GridCell == FIntPoint::ZeroValue;
+	});
+	const FDeepLevelRoadTilePlacement* BasePlacement = BasePlan.Placements.FindByPredicate([](const FDeepLevelRoadTilePlacement& Placement)
+	{
+		return Placement.GridCell == FIntPoint::ZeroValue;
+	});
+	if (TestNotNull(TEXT("Modified cell remains present"), ModifiedPlacement)
+		&& TestNotNull(TEXT("Base cell exists for comparison"), BasePlacement))
+	{
+		TestEqual(
+			TEXT("Modify applies local height offset on top of catalog calibration"),
+			ModifiedPlacement->Transform.GetLocation().Z,
+			BasePlacement->Transform.GetLocation().Z + 25.0);
+		TestTrue(TEXT("Modify applies rotation offset"),
+			FMath::IsNearlyEqual(
+				ModifiedPlacement->Transform.Rotator().Yaw,
+				BasePlacement->Transform.Rotator().Yaw + 15.0,
+				0.01));
+		TestTrue(TEXT("Modify applies scale multiplier"),
+			ModifiedPlacement->Transform.GetScale3D().Equals(
+				BasePlacement->Transform.GetScale3D() * FVector(1.1, 1.1, 1.0),
+				0.01));
+	}
+
+	const FDeepLevelRoadTilePlacement* AddedPlacement = OverridePlan.Placements.FindByPredicate([](const FDeepLevelRoadTilePlacement& Placement)
+	{
+		return Placement.GridCell == FIntPoint(10, 10);
+	});
+	if (TestNotNull(TEXT("Added cell creates a placement"), AddedPlacement))
+	{
+		TestEqual(TEXT("Added cell uses authored kind"), AddedPlacement->Kind, EDeepLevelRoadTileKind::Sidewalk);
+		TestTrue(TEXT("Added cell is positioned from the Road Network grid"),
+			AddedPlacement->Transform.GetLocation().Equals(FVector(5000.0, 5000.0, 0.0), 0.01));
+	}
+
+	FDeepLevelRoadCellOverride Duplicate = Modify;
+	Duplicate.Mode = EDeepLevelRoadCellOverrideMode::Remove;
+	const TArray<FDeepLevelRoadCellOverride> DuplicateOverrides = {Modify, Duplicate};
+	TestFalse(TEXT("Duplicate overrides are rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(
+		*Catalog, Splines, FVector::ZeroVector, 41, OverridePlan, Error, DuplicateOverrides));
+	TestFalse(TEXT("Duplicate override validation reports an error"), Error.IsEmpty());
+	return true;
+}
+
 #endif
