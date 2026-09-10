@@ -1,6 +1,6 @@
 # DeepLevelDesignPCG
 
-Reusable Unreal Engine 5.7 PCG authoring tools for deterministic road networks and building lines.
+Reusable Unreal Engine 5.8 PCG authoring tools for deterministic road networks and building lines.
 
 The plugin is independent from host-project code and content. It ships generic Blueprint actors, PCG graphs, editor calibration workspaces, and source icons. Meshes, Packed Level Actors, and populated catalog Data Assets remain owned by the host project.
 
