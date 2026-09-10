@@ -94,6 +94,10 @@ bool FDeepLevelRoadNetworkActorTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Generated Road Meshes is attached to the scene root"),
 		Network->GeneratedRoadMeshes->GetAttachParent() == Network->RoadNetworkRoot);
+	TestEqual(
+		TEXT("Road meshes block collision by default"),
+		Network->RoadMeshCollisionProfile.Name,
+		UCollisionProfile::BlockAll_ProfileName);
 
 	UDeepLevelRoadSplineComponent* FirstSpline = Network->CreateRoadBranch();
 	if (!TestNotNull(TEXT("The first authored branch is created"), FirstSpline))
@@ -170,6 +174,10 @@ bool FDeepLevelRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TEXT("PCG-managed ISM is organized under Generated Road Meshes"),
 		GeneratedISM->GetAttachParent(),
 		Network->GeneratedRoadMeshes.Get());
+	TestEqual(
+		TEXT("PCG-managed ISM uses the Road Network collision profile"),
+		GeneratedISM->GetCollisionProfileName(),
+		Network->RoadMeshCollisionProfile.Name);
 
 	Network->SetActorLocation(FVector(125.0, 250.0, 875.0));
 	TestEqual(TEXT("Road Network actor transform owns the complete grid origin"), Network->GetGridOrigin(), Network->GetActorLocation());

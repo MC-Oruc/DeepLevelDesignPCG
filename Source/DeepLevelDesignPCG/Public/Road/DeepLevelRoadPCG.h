@@ -7,6 +7,7 @@
 #include "PCGSettings.h"
 #include "Components/BoxComponent.h"
 #include "Components/SplineComponent.h"
+#include "Engine/CollisionProfile.h"
 #include "Engine/DataAsset.h"
 #include "DeepLevelRoadPCG.generated.h"
 
@@ -51,6 +52,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Road Network")
 	TSoftObjectPtr<UDeepLevelRoadTileCatalog> Catalog;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Road Collision")
+	FCollisionProfileName RoadMeshCollisionProfile = UCollisionProfile::BlockAll_ProfileName;
 
 	UDeepLevelRoadSplineComponent* CreateRoadBranch();
 	void GetRoadSplineComponents(TArray<UDeepLevelRoadSplineComponent*>& OutSplines) const;
@@ -324,4 +328,3 @@ public:
 		FDeepLevelRoadNetworkPlan& OutPlan,
 		FText& OutError);
 };
-

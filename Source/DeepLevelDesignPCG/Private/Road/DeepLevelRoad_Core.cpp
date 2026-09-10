@@ -144,7 +144,14 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 
 	for (UInstancedStaticMeshComponent* ISMComponent : GeneratedISMs)
 	{
-		if (ISMComponent && ISMComponent->GetAttachParent() != GeneratedRoadMeshes)
+		if (!ISMComponent)
+		{
+			continue;
+		}
+
+		ISMComponent->SetCollisionProfileName(RoadMeshCollisionProfile.Name);
+
+		if (ISMComponent->GetAttachParent() != GeneratedRoadMeshes)
 		{
 			ISMComponent->AttachToComponent(GeneratedRoadMeshes, FAttachmentTransformRules::KeepWorldTransform);
 		}
