@@ -9,6 +9,7 @@
 #include "Components/SplineComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/DataAsset.h"
+#include "City/DeepLevelCityLayout.h"
 #include "DeepLevelRoadPCG.generated.h"
 
 
@@ -91,16 +92,19 @@ class DEEPLEVELDESIGNPCG_API UDeepLevelRoadNetworkRootComponent : public UBoxCom
 
 /** Owns every spline branch and the PCG generation for one road network. */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
-class DEEPLEVELDESIGNPCG_API ADeepLevelRoadNetworkActor : public AActor
+class DEEPLEVELDESIGNPCG_API ADeepLevelRoadNetworkActor : public AActor, public IDeepLevelCityLayoutProvider
 {
 	GENERATED_BODY()
 
 public:
 	ADeepLevelRoadNetworkActor();
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void PostLoad() override;
+	virtual void PostActorCreated() override;
+	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network", meta = (ClampMin = "1.0", UIMin = "1.0"))
-	double GridSize = 500.0;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network")
+	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "@Deep Level Design PCG|Road Network")
 	TSoftObjectPtr<UDeepLevelRoadTileCatalog> Catalog;
@@ -113,7 +117,13 @@ public:
 
 	UDeepLevelRoadSplineComponent* CreateRoadBranch();
 	void GetRoadSplineComponents(TArray<UDeepLevelRoadSplineComponent*>& OutSplines) const;
+	bool ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
 	FVector GetGridOrigin() const;
+	double GetGridSize() const;
+	virtual bool BuildCityLayoutFragment(
+		const FDeepLevelCityGrid& Grid,
+		FDeepLevelCityLayoutFragment& OutFragment,
+		FText& OutError) const override;
 	void NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange Change = EDeepLevelRoadNetworkChange::Geometry);
 
 #if WITH_EDITOR
@@ -136,7 +146,14 @@ public:
 	TObjectPtr<UPCGComponent> PCGComponent;
 
 private:
+	void EnsureLayoutSourceGuid();
 	void OrganizeGeneratedRoadMeshes(UPCGComponent* GeneratedComponent);
+
+	UPROPERTY(VisibleAnywhere, Category = "@Deep Level Design PCG|Road Network")
+	FGuid LayoutSourceGuid;
+
+	UPROPERTY(VisibleAnywhere, Category = "@Deep Level Design PCG|Road Network")
+	int32 LayoutRevision = 0;
 
 #if WITH_EDITOR
 	void GenerateInitialRoadNetwork();
@@ -328,9 +345,10 @@ class DEEPLEVELDESIGNPCG_API UDeepLevelRoadTileCatalog : public UDataAsset
 
 public:
 	bool ValidateForGeneration(FText& OutError) const;
+	double GetTileSize() const;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1.0", UIMin = "1.0"))
-	double GridCellSize = 500.0;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+	TObjectPtr<UDeepLevelCityGridProfile> GridProfile;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "8", UIMin = "1", UIMax = "8"))
 	int32 SidewalkWidthInTiles = 2;
@@ -349,6 +367,8 @@ struct FDeepLevelRoadTilePlacement
 	TSoftObjectPtr<UStaticMesh> TileMesh;
 	TSoftObjectPtr<UMaterialInterface> TileMaterialOverride;
 	FTransform Transform = FTransform::Identity;
+	/** World-space support plane used by city surface/edge anchors. */
+	FTransform SurfaceTransform = FTransform::Identity;
 	FIntPoint GridCell = FIntPoint::ZeroValue;
 	EDeepLevelRoadTileKind Kind = EDeepLevelRoadTileKind::Road;
 	int32 ConnectionMask = 0;
@@ -369,7 +389,7 @@ public:
 	static bool BuildPlan(
 		const UDeepLevelRoadTileCatalog& Catalog,
 		const TArray<const UPCGSplineData*>& Splines,
-		const FVector& GridOrigin,
+		const FDeepLevelCityGrid& Grid,
 		int32 Seed,
 		FDeepLevelRoadNetworkPlan& OutPlan,
 		FText& OutError,

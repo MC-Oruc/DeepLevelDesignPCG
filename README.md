@@ -1,6 +1,6 @@
 # DeepLevelDesignPCG
 
-Reusable Unreal Engine 5.8 PCG authoring tools for deterministic road networks and building lines.
+Reusable Unreal Engine 5.8 tools for deterministic city layouts, road networks, building lines, and categorized decoration.
 
 The plugin is independent from host-project code and content. It ships generic Blueprint actors, PCG graphs, editor calibration workspaces, and source icons. Meshes, Packed Level Actors, and populated catalog Data Assets remain owned by the host project.
 
@@ -17,6 +17,7 @@ Enable `DeepLevelDesignPCG` in the project descriptor and build the Editor targe
 
 - `/DeepLevelDesignPCG/Building/BP_DeepLevelBuildingLine`
 - `/DeepLevelDesignPCG/Building/PCG_DeepLevelBuildingLine`
+- `/DeepLevelDesignPCG/City/DA_DeepLevelCityGrid_500`
 - `/DeepLevelDesignPCG/Road/BP_DeepLevelRoadNetwork`
 - `/DeepLevelDesignPCG/Road/PCG_DeepLevelRoadNetwork`
 
@@ -24,13 +25,33 @@ The shipped graphs intentionally have no catalog assigned.
 
 ## Host Project Setup
 
-1. Create a `Deep Level Building Placement Catalog` Data Asset and add calibrated Packed Level Actors.
-2. Assign it to the Building Line node in a project-owned graph copy or graph instance.
-3. Create a `Deep Level Road Tile Catalog` Data Asset and calibrate the road and sidewalk tile set.
-4. Assign it to the Road Network node in a project-owned graph copy or graph instance.
-5. Place the corresponding Blueprint actor and author its spline geometry.
+1. Place one `Deep Level City Layout` actor and assign a City Grid Profile. The shipped 500 cm profile is a ready starting point.
+2. Set the city origin, ground height, and grid extent on that actor.
+3. Create a `Deep Level Building Placement Catalog` Data Asset and add calibrated Packed Level Actors.
+4. Create a `Deep Level Road Tile Catalog` Data Asset and calibrate the road and sidewalk tile set. Assign the same City Grid Profile used by the City Layout.
+5. Place Road Network and Building Line actors, assign their City Layout, then author their geometry and catalogs.
+6. Create focused Decoration Category assets, compose them in one Decoration Set, and assign that set to the City Layout.
+7. Use `Regenerate City Decoration` on the City Layout. Normal regeneration rebuilds dirty chunks; force regeneration rebuilds every output chunk.
 
-Catalogs are project data. They contain mesh/class references, placement volumes, exposure rules, connectivity, weights, and calibration state; they are not copied into the plugin.
+Catalogs and populated Decoration assets are project data. They contain mesh/class references, placement volumes, matching rules, connectivity, weights, and calibration state; they are not copied into the plugin.
+
+## City Layout and Decoration
+
+The City Layout is the composition root. It owns the shared translated grid, generation bounds, provider list, decoration seed, Decoration Set, persistent overrides, immutable merged snapshot, and materialized output chunks. Road and Building remain authoritative for their own geometry and only publish immutable semantic fragments.
+
+Decoration Categories are reusable rule groups. Each entry filters semantic anchor tags, required or blocked occupancy, probability, deterministic anchor interval, spacing, and clearance, then emits a Static Mesh, Actor, or Decal. A Decoration Set composes categories and defines deterministic priority. Stable placement IDs derive from the source, anchor, slot, and entry identity, so `Remove`, `Modify`, and `Add` overrides survive regeneration. Solid Mesh and Actor outputs also respect physical clearance across placement slots; decals do not block solid props.
+
+Generated outputs are saved instance components owned by the City Layout and grouped by chunk:
+
+- Static Mesh entries are grouped into Hierarchical Instanced Static Mesh components.
+- Actor entries use Child Actor components, allowing project-owned Blueprint props such as functional street lights.
+- Decal entries create saved decal components.
+
+Editor regeneration replaces the owned output set and marks the City Layout package dirty. Saved maps load the generated components directly in the editor and packaged game; `BeginPlay` does not rebuild them. The catalog, seed, providers, and overrides remain authoritative inputs for deliberate regeneration.
+
+The resolver rejects invalid profiles, provider/grid mismatches, duplicate stable identities, invalid output entries, and invalid overrides with explicit diagnostics. It does not silently rebuild or substitute missing authoring data.
+
+Road publishes calibrated road/sidewalk surfaces plus oriented sidewalk-edge anchors. Edge anchors carry road tangent, usable sidewalk depth, nearby-junction safety, dead-end, and local/arterial road classification. Decoration rules can therefore align furniture along curbs, keep it clear of crossings, restrict traffic control to endpoints, and select lighting by road width. Road and Building revisions plus grid-chunk differences determine dirty chunks. Regeneration replaces only those chunks unless force regeneration is requested. Moving the City Layout establishes a new translated grid origin; rotation and scale are intentionally unsupported.
 
 ## Local Road Overrides
 

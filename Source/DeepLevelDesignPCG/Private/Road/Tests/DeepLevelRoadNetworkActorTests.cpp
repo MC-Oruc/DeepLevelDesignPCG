@@ -76,10 +76,15 @@ bool FDeepLevelRoadNetworkActorTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	ADeepLevelCityLayoutActor* CityLayout = World->SpawnActor<ADeepLevelCityLayoutActor>();
+	CityLayout->GridProfile = NewObject<UDeepLevelCityGridProfile>(CityLayout);
+	CityLayout->SetActorLocation(FVector(125.0, 250.0, 875.0));
+	Network->CityLayout = CityLayout;
 
 	TArray<UDeepLevelRoadSplineComponent*> Splines;
 	Network->GetRoadSplineComponents(Splines);
-	TestEqual(TEXT("Road Network exposes the 500-unit authoring grid"), Network->GridSize, 500.0);
+	TestEqual(TEXT("Road Network resolves the shared 500-unit authoring grid"), Network->GetGridSize(), 500.0);
+	TestEqual(TEXT("Road Network resolves the City Layout origin"), Network->GetGridOrigin(), CityLayout->GetActorLocation());
 	TestTrue(TEXT("Road Network has a dedicated visualization root"), Network->RoadNetworkRoot->IsA<UDeepLevelRoadNetworkRootComponent>());
 	TestEqual(TEXT("Road Network starts without an authored spline branch"), Splines.Num(), 0);
 	TestTrue(TEXT("Road Network has a native scene root"), Network->GetRootComponent() == Network->RoadNetworkRoot);
@@ -180,7 +185,7 @@ bool FDeepLevelRoadNetworkActorTest::RunTest(const FString& Parameters)
 		Network->RoadMeshCollisionProfile.Name);
 
 	Network->SetActorLocation(FVector(125.0, 250.0, 875.0));
-	TestEqual(TEXT("Road Network actor transform owns the complete grid origin"), Network->GetGridOrigin(), Network->GetActorLocation());
+	TestEqual(TEXT("Road Network movement does not move the shared grid"), Network->GetGridOrigin(), CityLayout->GetActorLocation());
 
 	return true;
 }

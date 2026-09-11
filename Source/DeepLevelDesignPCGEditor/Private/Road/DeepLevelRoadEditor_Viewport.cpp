@@ -262,7 +262,7 @@ ADeepLevelRoadNetworkActor* FDeepLevelRoadSplineComponentVisualizer::GetSelected
 bool FDeepLevelRoadSplineComponentVisualizer::UpdateHoveredCell()
 {
 	ADeepLevelRoadNetworkActor* Network = GetSelectedRoadNetwork();
-	if (!Network || !FMath::IsFinite(Network->GridSize) || Network->GridSize <= UE_DOUBLE_SMALL_NUMBER)
+	if (!Network || Network->GetGridSize() <= UE_DOUBLE_SMALL_NUMBER)
 	{
 		bHasHoveredCell = false;
 		HoveredNetwork.Reset();
@@ -311,7 +311,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::UpdateHoveredCell()
 	const FVector NewHoveredCell = SnapWorldToGrid(
 		CursorOnRoadPlane,
 		GridOrigin,
-		Network->GridSize);
+		Network->GetGridSize());
 	const bool bChanged = !bHasHoveredCell
 		|| HoveredNetwork.Get() != Network
 		|| !HoveredCell.Equals(NewHoveredCell, 0.1);
@@ -345,7 +345,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::FindEndpointAtHoveredCell(
 			*Spline,
 			HoveredCell,
 			Network.GetGridOrigin(),
-			Network.GridSize);
+			Network.GetGridSize());
 		if (PointIndex != INDEX_NONE)
 		{
 			OutSpline = Spline;
@@ -375,11 +375,11 @@ void FDeepLevelRoadSplineComponentVisualizer::AppendHoveredCellToPath()
 		FVector Next = Current;
 		if (FMath::Abs(Delta.X) >= FMath::Abs(Delta.Y) && !FMath::IsNearlyZero(Delta.X))
 		{
-			Next.X += FMath::Sign(Delta.X) * Network->GridSize;
+			Next.X += FMath::Sign(Delta.X) * Network->GetGridSize();
 		}
 		else
 		{
-			Next.Y += FMath::Sign(Delta.Y) * Network->GridSize;
+			Next.Y += FMath::Sign(Delta.Y) * Network->GetGridSize();
 		}
 
 		if (DragPath.Num() >= 2 && Next.Equals(DragPath[DragPath.Num() - 2], 0.1))
@@ -411,7 +411,7 @@ void FDeepLevelRoadSplineComponentVisualizer::BuildReplacementPath(TArray<FVecto
 		return SnapWorldToGrid(
 			Spline->GetLocationAtSplinePoint(PointIndex, ESplineCoordinateSpace::World),
 			GridOrigin,
-			Network->GridSize);
+			Network->GetGridSize());
 	};
 	TArray<FVector> FixedPath;
 	if (bReplaceSplineStart)
@@ -421,12 +421,12 @@ void FDeepLevelRoadSplineComponentVisualizer::BuildReplacementPath(TArray<FVecto
 			PointIndex > EditedSegmentIndex;
 			--PointIndex)
 		{
-			AppendGridSegment(FixedPath.Last(), GetSnappedPoint(PointIndex), Network->GridSize, FixedPath);
+			AppendGridSegment(FixedPath.Last(), GetSnappedPoint(PointIndex), Network->GetGridSize(), FixedPath);
 		}
 		AppendGridSegment(
 			FixedPath.Last(),
-			SnapWorldToGrid(DragAnchor, GridOrigin, Network->GridSize),
-			Network->GridSize,
+			SnapWorldToGrid(DragAnchor, GridOrigin, Network->GetGridSize()),
+			Network->GetGridSize(),
 			FixedPath);
 		ComposeReshapedGridPath(FixedPath, DragPath, OutPath);
 		for (int32 Left = 0, Right = OutPath.Num() - 1; Left < Right; ++Left, --Right)
@@ -439,12 +439,12 @@ void FDeepLevelRoadSplineComponentVisualizer::BuildReplacementPath(TArray<FVecto
 		FixedPath.Add(GetSnappedPoint(0));
 		for (int32 PointIndex = 1; PointIndex <= EditedSegmentIndex; ++PointIndex)
 		{
-			AppendGridSegment(FixedPath.Last(), GetSnappedPoint(PointIndex), Network->GridSize, FixedPath);
+			AppendGridSegment(FixedPath.Last(), GetSnappedPoint(PointIndex), Network->GetGridSize(), FixedPath);
 		}
 		AppendGridSegment(
 			FixedPath.Last(),
-			SnapWorldToGrid(DragAnchor, GridOrigin, Network->GridSize),
-			Network->GridSize,
+			SnapWorldToGrid(DragAnchor, GridOrigin, Network->GetGridSize()),
+			Network->GetGridSize(),
 			FixedPath);
 		ComposeReshapedGridPath(FixedPath, DragPath, OutPath);
 	}
@@ -475,7 +475,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::DoesDragPathOverlapExistingRoad() 
 				Spline->GetLocationAtSplinePoint(SegmentIndex, ESplineCoordinateSpace::World),
 				Spline->GetLocationAtSplinePoint(SegmentIndex + 1, ESplineCoordinateSpace::World),
 				GridOrigin,
-				Network->GridSize,
+				Network->GetGridSize(),
 				[&ExistingEdges](const FGridEdge& Edge) { ExistingEdges.Add(Edge); });
 		}
 	}
@@ -491,7 +491,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::DoesDragPathOverlapExistingRoad() 
 	BuildReplacementPath(CandidatePath);
 	for (int32 Index = 0; Index + 1 < CandidatePath.Num(); ++Index)
 	{
-		AddSegmentEdges(CandidatePath[Index], CandidatePath[Index + 1], GridOrigin, Network->GridSize, TestEdge);
+		AddSegmentEdges(CandidatePath[Index], CandidatePath[Index + 1], GridOrigin, Network->GetGridSize(), TestEdge);
 	}
 	return bOverlaps;
 }
@@ -528,12 +528,12 @@ void FDeepLevelRoadSplineComponentVisualizer::DrawVisualization(
 		return;
 	}
 
-	const double HalfGrid = Network->GridSize * 0.5;
+	const double HalfGrid = Network->GetGridSize() * 0.5;
 	const double Height = Network->GetActorLocation().Z + 8.0;
 	for (const FDeepLevelRoadCellOverride& Override : Network->CellOverrides)
 	{
 		const FVector Center = Network->GetGridOrigin()
-			+ FVector(Override.GridCell.X * Network->GridSize, Override.GridCell.Y * Network->GridSize, 12.0);
+			+ FVector(Override.GridCell.X * Network->GetGridSize(), Override.GridCell.Y * Network->GetGridSize(), 12.0);
 		const FVector OverrideCorners[] = {
 			FVector(Center.X - HalfGrid, Center.Y - HalfGrid, Center.Z),
 			FVector(Center.X + HalfGrid, Center.Y - HalfGrid, Center.Z),
@@ -635,7 +635,7 @@ void FDeepLevelRoadSplineComponentVisualizer::DrawVisualizationHUD(
 
 	if (bHasHoveredCell && HoveredNetwork.Get() == Network)
 	{
-		const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+		const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GetGridSize());
 		FCanvasTextItem CellLabel(
 			FVector2D(24.0, 108.0),
 			FText::Format(LOCTEXT("HoveredRoadCell", "Grid Cell: {0}, {1}"), FText::AsNumber(Cell.X), FText::AsNumber(Cell.Y)),
@@ -776,7 +776,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::ToggleHoveredCellRemoval()
 		return false;
 	}
 
-	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GetGridSize());
 	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
 	{
 		return Override.GridCell == Cell;
@@ -830,7 +830,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::SetHoveredCellOverride(
 		return true;
 	}
 
-	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GetGridSize());
 	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
 	{
 		return Override.GridCell == Cell;
@@ -873,7 +873,7 @@ bool FDeepLevelRoadSplineComponentVisualizer::ClearHoveredCellOverride()
 		return false;
 	}
 
-	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GridSize);
+	const FIntPoint Cell = ToGridCell(HoveredCell, Network->GetGridOrigin(), Network->GetGridSize());
 	const int32 ExistingIndex = Network->CellOverrides.IndexOfByPredicate([Cell](const FDeepLevelRoadCellOverride& Override)
 	{
 		return Override.GridCell == Cell;

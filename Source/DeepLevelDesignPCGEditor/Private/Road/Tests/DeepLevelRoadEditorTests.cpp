@@ -79,6 +79,9 @@ bool FDeepLevelRoadSplineAuthoringTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	ADeepLevelCityLayoutActor* CityLayout = World->SpawnActor<ADeepLevelCityLayoutActor>();
+	CityLayout->GridProfile = NewObject<UDeepLevelCityGridProfile>(CityLayout);
+	Network->CityLayout = CityLayout;
 
 	int32 StructureNotifications = 0;
 	int32 GeometryNotifications = 0;
@@ -228,12 +231,12 @@ bool FDeepLevelRoadSplineAuthoringTest::RunTest(const FString& Parameters)
 			FVector::ZeroVector,
 			500.0),
 		1);
-	Network->SetActorLocation(FVector(250.0, 250.0, 0.0));
+	Network->SetActorLocation(FVector(500.0, 500.0, 0.0));
 	TestEqual(
 		TEXT("A moved Road Network still classifies its spline endpoint"),
 		FDeepLevelRoadSplineComponentVisualizer::FindSplineEndpointAtGridCell(
 			*NewSpline,
-			FVector(2250.0, 250.0, 0.0),
+			FVector(2500.0, 500.0, 0.0),
 			Network->GetGridOrigin(),
 			500.0),
 		1);

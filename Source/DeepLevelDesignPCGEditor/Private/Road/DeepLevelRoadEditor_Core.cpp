@@ -357,7 +357,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::LoadProxy()
 	Proxy->VolumeCenter = Tile.PlacementVolume.Center;
 	Proxy->VolumeRotation = Tile.PlacementVolume.Rotation;
 	Proxy->VolumeHeight = Tile.PlacementVolume.Extent.Z * 2.0;
-	Proxy->TileSize = Catalog->GridCellSize;
+	Proxy->TileSize = Catalog->GetTileSize();
 	Proxy->SelectionWeight = Tile.SelectionWeight;
 	Proxy->bCalibrated = Tile.bCalibrated;
 	DetailsView->ForceRefresh();
@@ -376,7 +376,8 @@ void FDeepLevelRoadTileCatalogEditorToolkit::CommitProxy(const FPropertyChangedE
 		Tile.TileMaterialOverride = Proxy->TileMaterialOverride;
 		Tile.PlacementVolume.Center = Proxy->VolumeCenter;
 		Tile.PlacementVolume.Rotation = Proxy->VolumeRotation;
-		Tile.PlacementVolume.Extent = FVector(Catalog->GridCellSize * 0.5, Catalog->GridCellSize * 0.5, FMath::Max(Proxy->VolumeHeight * 0.5, 1.0));
+		const double TileSize = Catalog->GetTileSize();
+		Tile.PlacementVolume.Extent = FVector(TileSize * 0.5, TileSize * 0.5, FMath::Max(Proxy->VolumeHeight * 0.5, 1.0));
 		Tile.SelectionWeight = FMath::Max(Proxy->SelectionWeight, 0.01);
 		Tile.bCalibrated = true;
 	});
@@ -389,7 +390,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::RefreshPreview()
 {
 	if (PreviewViewport && Catalog)
 	{
-		PreviewViewport->PreviewTile(Catalog->Tiles.IsValidIndex(SelectedTile) ? &Catalog->Tiles[SelectedTile] : nullptr, Catalog->GridCellSize);
+		PreviewViewport->PreviewTile(Catalog->Tiles.IsValidIndex(SelectedTile) ? &Catalog->Tiles[SelectedTile] : nullptr, Catalog->GetTileSize());
 	}
 }
 
@@ -502,7 +503,7 @@ FReply FDeepLevelRoadTileCatalogEditorToolkit::AddTile()
 		}
 		FVector Center;
 		FVector Extent;
-		if (!PreviewViewport->AutoFitVolume(TileMesh, Catalog->GridCellSize, Center, Extent))
+		if (!PreviewViewport->AutoFitVolume(TileMesh, Catalog->GetTileSize(), Center, Extent))
 		{
 			continue;
 		}
@@ -542,7 +543,7 @@ FReply FDeepLevelRoadTileCatalogEditorToolkit::AutoFit()
 		FDeepLevelRoadTileDefinition& Tile = Catalog->Tiles[SelectedTile];
 		FVector Center;
 		FVector Extent;
-		if (PreviewViewport->AutoFitVolume(Tile.TileMesh.LoadSynchronous(), Catalog->GridCellSize, Center, Extent))
+		if (PreviewViewport->AutoFitVolume(Tile.TileMesh.LoadSynchronous(), Catalog->GetTileSize(), Center, Extent))
 		{
 			ModifyCatalog(LOCTEXT("AutoFitTx", "Auto Fit Road Tile"), [&Tile, Center, Extent]
 			{
@@ -565,7 +566,8 @@ FReply FDeepLevelRoadTileCatalogEditorToolkit::ResetTile()
 		{
 			FDeepLevelRoadTileDefinition& Tile = Catalog->Tiles[SelectedTile];
 			Tile.PlacementVolume = FDeepLevelRoadTilePlacementVolume();
-			Tile.PlacementVolume.Extent = FVector(Catalog->GridCellSize * 0.5, Catalog->GridCellSize * 0.5, 50.0);
+			const double TileSize = Catalog->GetTileSize();
+			Tile.PlacementVolume.Extent = FVector(TileSize * 0.5, TileSize * 0.5, 50.0);
 			Tile.bCalibrated = false;
 		});
 		LoadProxy();

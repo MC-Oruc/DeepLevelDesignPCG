@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 7,
-  "VersionName": "0.3.4",
+  "Version": 8,
+  "VersionName": "0.4.0",
   "FriendlyName": "Deep Level Design PCG",
-  "Description": "Reusable PCG authoring tools for road networks and building lines.",
+  "Description": "Deterministic city layout, road, building, and decoration authoring tools.",
   "Category": "Procedural",
   "CreatedBy": "MC-Oruc",
   "CreatedByURL": "https://github.com/MC-Oruc",

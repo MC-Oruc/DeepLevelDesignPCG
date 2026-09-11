@@ -11,6 +11,7 @@
 #include "PCGComponent.h"
 #include "PCGGraph.h"
 #include "PCGManagedResource.h"
+#include "Data/PCGSplineData.h"
 #include "Components/BillboardComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
@@ -69,6 +70,33 @@ ADeepLevelRoadNetworkActor::ADeepLevelRoadNetworkActor()
 	}
 }
 
+void ADeepLevelRoadNetworkActor::PostLoad()
+{
+	Super::PostLoad();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelRoadNetworkActor::PostActorCreated()
+{
+	Super::PostActorCreated();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelRoadNetworkActor::PostDuplicate(const EDuplicateMode::Type DuplicateMode)
+{
+	Super::PostDuplicate(DuplicateMode);
+	LayoutSourceGuid = FGuid::NewGuid();
+	LayoutRevision = 0;
+}
+
+void ADeepLevelRoadNetworkActor::EnsureLayoutSourceGuid()
+{
+	if (!LayoutSourceGuid.IsValid())
+	{
+		LayoutSourceGuid = FGuid::NewGuid();
+	}
+}
+
 void ADeepLevelRoadNetworkActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
@@ -122,7 +150,200 @@ void ADeepLevelRoadNetworkActor::GetRoadSplineComponents(TArray<UDeepLevelRoadSp
 
 FVector ADeepLevelRoadNetworkActor::GetGridOrigin() const
 {
-	return GetActorLocation();
+	FDeepLevelCityGrid Grid;
+	FText Error;
+	return ResolveCityGrid(Grid, Error) ? Grid.Origin : FVector::ZeroVector;
+}
+
+double ADeepLevelRoadNetworkActor::GetGridSize() const
+{
+	FDeepLevelCityGrid Grid;
+	FText Error;
+	return ResolveCityGrid(Grid, Error) ? Grid.TileSize : 0.0;
+}
+
+bool ADeepLevelRoadNetworkActor::ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const
+{
+	if (!CityLayout)
+	{
+		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "MissingCityLayout", "Road Network requires a City Layout actor.");
+		return false;
+	}
+	return CityLayout->ResolveGrid(OutGrid, OutError);
+
+}
+
+bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
+	const FDeepLevelCityGrid& Grid,
+	FDeepLevelCityLayoutFragment& OutFragment,
+	FText& OutError) const
+{
+	OutFragment = {};
+	OutError = FText::GetEmpty();
+
+	FDeepLevelCityGrid OwnedGrid;
+	if (!ResolveCityGrid(OwnedGrid, OutError))
+	{
+		return false;
+	}
+	if (!OwnedGrid.Origin.Equals(Grid.Origin, 0.01)
+		|| !FMath::IsNearlyEqual(OwnedGrid.TileSize, Grid.TileSize, 0.01)
+		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells
+		|| OwnedGrid.ExtentInCells != Grid.ExtentInCells)
+	{
+		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "ForeignCityGrid", "Road Network cannot build a fragment for a different City Layout grid.");
+		return false;
+	}
+
+	UDeepLevelRoadTileCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog)
+	{
+		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "MissingFragmentCatalog", "Road Network requires a Road Tile Catalog.");
+		return false;
+	}
+
+	TArray<UDeepLevelRoadSplineComponent*> SplineComponents;
+	GetRoadSplineComponents(SplineComponents);
+	OutFragment.SourceGuid = LayoutSourceGuid;
+	OutFragment.SourceRevision = LayoutRevision;
+	if (SplineComponents.IsEmpty())
+	{
+		return true;
+	}
+
+	TArray<TObjectPtr<UPCGSplineData>> OwnedSplineData;
+	TArray<const UPCGSplineData*> Splines;
+	OwnedSplineData.Reserve(SplineComponents.Num());
+	Splines.Reserve(SplineComponents.Num());
+	for (UDeepLevelRoadSplineComponent* SplineComponent : SplineComponents)
+	{
+		UPCGSplineData* SplineData = NewObject<UPCGSplineData>();
+		SplineData->Initialize(SplineComponent);
+		OwnedSplineData.Add(SplineData);
+		Splines.Add(SplineData);
+	}
+
+	FDeepLevelRoadNetworkPlan Plan;
+	if (!FDeepLevelRoadNetworkPlanner::BuildPlan(
+		*LoadedCatalog, Splines, Grid, 0, Plan, OutError, CellOverrides))
+	{
+		return false;
+	}
+
+	OutFragment.Cells.Reserve(Plan.Placements.Num());
+	OutFragment.Anchors.Reserve(Plan.Placements.Num() * 2);
+	TMap<FIntPoint, const FDeepLevelRoadTilePlacement*> RoadPlacements;
+	TSet<FIntPoint> SidewalkCells;
+	TSet<FIntPoint> JunctionCells;
+	for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
+	{
+		if (Placement.Kind == EDeepLevelRoadTileKind::Road)
+		{
+			RoadPlacements.Add(Placement.GridCell, &Placement);
+			if (Placement.bJunctionApproach || FMath::CountBits64(static_cast<uint64>(Placement.ConnectionMask)) > 2)
+			{
+				JunctionCells.Add(Placement.GridCell);
+			}
+		}
+		else
+		{
+			SidewalkCells.Add(Placement.GridCell);
+		}
+	}
+	for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
+	{
+		const EDeepLevelCityOccupancy Occupancy = Placement.Kind == EDeepLevelRoadTileKind::Road
+			? EDeepLevelCityOccupancy::Road
+			: EDeepLevelCityOccupancy::Sidewalk;
+		FDeepLevelCityCellState& Cell = OutFragment.Cells.Emplace_GetRef();
+		Cell.Cell = Placement.GridCell;
+		Cell.OccupancyMask = static_cast<int32>(Occupancy);
+		Cell.Tags.AddTag(Placement.Kind == EDeepLevelRoadTileKind::Road
+			? DeepLevelCityTags::Cell_Road
+			: DeepLevelCityTags::Cell_Sidewalk);
+
+		FDeepLevelCityAnchor& Anchor = OutFragment.Anchors.Emplace_GetRef();
+		const FString LocalKey = FString::Printf(TEXT("Cell:%d:%d"), Placement.GridCell.X, Placement.GridCell.Y);
+		const FName Slot = Placement.Kind == EDeepLevelRoadTileKind::Road ? TEXT("RoadSurface") : TEXT("SidewalkSurface");
+		Anchor.StableId = FDeepLevelCityStableId::MakeAnchorId(LayoutSourceGuid, LocalKey, Slot);
+		Anchor.Geometry = EDeepLevelCityAnchorGeometry::Surface;
+		Anchor.Tags.AddTag(Placement.Kind == EDeepLevelRoadTileKind::Road
+			? DeepLevelCityTags::Anchor_Road_Surface
+			: DeepLevelCityTags::Anchor_Sidewalk_Surface);
+		Anchor.Transform = Placement.SurfaceTransform;
+		Anchor.Extent = FVector(Grid.TileSize * 0.5, Grid.TileSize * 0.5, 0.0);
+		Anchor.OccupiedCells.Add(Placement.GridCell);
+		Anchor.SourceRevision = LayoutRevision;
+
+		if (Placement.Kind != EDeepLevelRoadTileKind::Sidewalk)
+		{
+			continue;
+		}
+		static const FIntPoint NeighborDirections[] = {
+			FIntPoint(1, 0), FIntPoint(0, 1), FIntPoint(-1, 0), FIntPoint(0, -1)};
+		for (const FIntPoint Direction : NeighborDirections)
+		{
+			const FDeepLevelRoadTilePlacement* const* RoadPlacement = RoadPlacements.Find(Placement.GridCell + Direction);
+			if (!RoadPlacement)
+			{
+				continue;
+			}
+			FDeepLevelCityAnchor& Edge = OutFragment.Anchors.Emplace_GetRef();
+			const FString EdgeKey = FString::Printf(
+				TEXT("Cell:%d:%d:Edge:%d:%d"), Placement.GridCell.X, Placement.GridCell.Y, Direction.X, Direction.Y);
+			Edge.StableId = FDeepLevelCityStableId::MakeAnchorId(LayoutSourceGuid, EdgeKey, TEXT("SidewalkEdge"));
+			Edge.Geometry = EDeepLevelCityAnchorGeometry::Segment;
+			const FVector RoadDirection(Direction.X, Direction.Y, 0.0);
+			const FVector Tangent(-RoadDirection.Y, RoadDirection.X, 0.0);
+			FVector Location = Grid.CellToWorld(Placement.GridCell)
+				+ RoadDirection * (Grid.TileSize * 0.5 - 75.0);
+			Location.Z = Placement.SurfaceTransform.GetLocation().Z;
+			Edge.Transform = FTransform(FRotationMatrix::MakeFromXZ(Tangent, FVector::UpVector).ToQuat(), Location);
+			Edge.Extent = FVector(Grid.TileSize * 0.5, 0.0, 0.0);
+			Edge.Tags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Edge);
+			const int32 ConnectionCount = FMath::CountBits64(static_cast<uint64>((*RoadPlacement)->ConnectionMask));
+			if (ConnectionCount == 1)
+			{
+				Edge.Tags.AddTag(DeepLevelCityTags::Anchor_Road_DeadEnd);
+			}
+
+			int32 RoadWidthInCells = 0;
+			for (FIntPoint RoadCell = Placement.GridCell + Direction; RoadPlacements.Contains(RoadCell); RoadCell += Direction)
+			{
+				++RoadWidthInCells;
+			}
+			Edge.Tags.AddTag(RoadWidthInCells > 1
+				? DeepLevelCityTags::Anchor_Road_Arterial
+				: DeepLevelCityTags::Anchor_Road_Local);
+
+			bool bNearJunction = false;
+			for (int32 X = -2; X <= 2 && !bNearJunction; ++X)
+			{
+				for (int32 Y = -2; Y <= 2; ++Y)
+				{
+					if (FMath::Abs(X) + FMath::Abs(Y) <= 2 && JunctionCells.Contains(Placement.GridCell + FIntPoint(X, Y)))
+					{
+						bNearJunction = true;
+						break;
+					}
+				}
+			}
+			if (bNearJunction)
+			{
+				Edge.Tags.AddTag(DeepLevelCityTags::Anchor_Road_Junction);
+			}
+
+			int32 SidewalkDepthInCells = 0;
+			for (FIntPoint SidewalkCell = Placement.GridCell; SidewalkCells.Contains(SidewalkCell); SidewalkCell -= Direction)
+			{
+				++SidewalkDepthInCells;
+			}
+			Edge.ClearanceDepth = SidewalkDepthInCells * Grid.TileSize;
+			Edge.OccupiedCells.Add(Placement.GridCell);
+			Edge.SourceRevision = LayoutRevision;
+		}
+	}
+	return true;
 }
 
 void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* GeneratedComponent)
@@ -162,6 +383,10 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 
 void ADeepLevelRoadNetworkActor::NotifyRoadNetworkChanged(const EDeepLevelRoadNetworkChange Change)
 {
+	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents)
+	{
+		++LayoutRevision;
+	}
 	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && PCGComponent)
 	{
 		PCGComponent->NotifyPropertiesChangedFromBlueprint();
@@ -339,7 +564,6 @@ void UDeepLevelRoadSplineComponent::OnComponentDestroyed(const bool bDestroyingH
 
 #include "PCGContext.h"
 #include "Data/PCGPointData.h"
-#include "Data/PCGSplineData.h"
 #include "Metadata/PCGMetadata.h"
 
 #define LOCTEXT_NAMESPACE "DeepLevelRoadNetworkPCGSettings"
@@ -424,18 +648,17 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 			Context);
 		return true;
 	}
-	if (!FMath::IsFinite(Network->GridSize) || Network->GridSize <= UE_DOUBLE_SMALL_NUMBER)
+	FDeepLevelCityGrid Grid;
+	FText Error;
+	if (!Network->ResolveCityGrid(Grid, Error))
 	{
-		ReportGenerationError(LOCTEXT("InvalidAuthoringGrid", "Road Network Grid Size must be greater than zero."), Context);
+		ReportGenerationError(Error, Context);
 		return true;
 	}
-	if (!FMath::IsNearlyEqual(Network->GridSize, Catalog->GridCellSize, 0.01))
+	if (Catalog->GridProfile != Network->CityLayout->GridProfile)
 	{
 		ReportGenerationError(
-			FText::Format(
-				LOCTEXT("GridSizeMismatch", "Road Network Grid Size ({0}) must match its Road Tile Catalog grid size ({1})."),
-				FText::AsNumber(Network->GridSize),
-				FText::AsNumber(Catalog->GridCellSize)),
+			LOCTEXT("GridProfileMismatch", "Road Network and Road Tile Catalog must reference the same City Grid Profile."),
 			Context);
 		return true;
 	}
@@ -456,11 +679,10 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 	}
 
 	FDeepLevelRoadNetworkPlan Plan;
-	FText Error;
 	if (!FDeepLevelRoadNetworkPlanner::BuildPlan(
 		*Catalog,
 		Splines,
-		Network->GetGridOrigin(),
+		Grid,
 		Settings->RandomSeed,
 		Plan,
 		Error,
@@ -531,14 +753,24 @@ namespace
 	}
 }
 
+double UDeepLevelRoadTileCatalog::GetTileSize() const
+{
+	return GridProfile ? GridProfile->TileSize : 0.0;
+}
+
 bool UDeepLevelRoadTileCatalog::ValidateForGeneration(FText& OutError) const
 {
 	OutError = FText::GetEmpty();
-	if (!FMath::IsFinite(GridCellSize) || GridCellSize <= UE_DOUBLE_SMALL_NUMBER)
+	if (!GridProfile)
 	{
-		OutError = LOCTEXT("InvalidGridSize", "Road Tile Catalog grid cell size must be greater than zero.");
+		OutError = LOCTEXT("MissingGridProfile", "Road Tile Catalog requires a City Grid Profile.");
 		return false;
 	}
+	if (!GridProfile->Validate(OutError))
+	{
+		return false;
+	}
+	const double TileSize = GridProfile->TileSize;
 	if (SidewalkWidthInTiles < 1)
 	{
 		OutError = LOCTEXT("InvalidSidewalkWidth", "Road Tile Catalog sidewalk width must be at least one tile.");
@@ -593,14 +825,14 @@ bool UDeepLevelRoadTileCatalog::ValidateForGeneration(FText& OutError) const
 		}
 		const double TileWidth = Extent.X * 2.0;
 		const double TileDepth = Extent.Y * 2.0;
-		const double SizeTolerance = FMath::Max(GridCellSize * 0.01, 1.0);
-		if (!FMath::IsNearlyEqual(TileWidth, GridCellSize, SizeTolerance)
-			|| !FMath::IsNearlyEqual(TileDepth, GridCellSize, SizeTolerance))
+		const double SizeTolerance = FMath::Max(TileSize * 0.01, 1.0);
+		if (!FMath::IsNearlyEqual(TileWidth, TileSize, SizeTolerance)
+			|| !FMath::IsNearlyEqual(TileDepth, TileSize, SizeTolerance))
 		{
 			OutError = FText::Format(
 				LOCTEXT("TileSizeMismatch", "Road Tile Catalog entry {0} must be a 1x1 tile calibrated to one {1} x {1} grid cell."),
 				FText::AsNumber(Index + 1),
-				FText::AsNumber(GridCellSize));
+				FText::AsNumber(TileSize));
 			return false;
 		}
 

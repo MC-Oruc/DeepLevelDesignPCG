@@ -8,6 +8,7 @@
 #include "Engine/DataAsset.h"
 #include "GameFramework/Actor.h"
 #include "Data/Registry/PCGGetDataFunctionRegistry.h"
+#include "City/DeepLevelCityLayout.h"
 #include "DeepLevelBuildingPCG.generated.h"
 
 
@@ -47,21 +48,6 @@ public:
 	virtual FText GetNodeTooltipText() const override;
 	virtual EPCGSettingsType GetType() const override { return EPCGSettingsType::Spawner; }
 #endif
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings", meta = (PCG_Overridable))
-	TSoftObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog;
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings", meta = (PCG_Overridable))
-	int32 RandomSeed = 1337;
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Variation", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0", PCG_Overridable))
-	double VarietyStrength = 1.0;
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Variation", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0", PCG_Overridable))
-	double CornerPreference = 1.0;
-
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings", meta = (DisplayName = "Corner Placement", Bitmask, BitmaskEnum = "/Script/DeepLevelDesignPCG.EDeepLevelCornerPlacementFlags"))
-	int32 CornerPlacementMask = static_cast<int32>(EDeepLevelCornerPlacementFlags::Inner);
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Settings|Output")
 	FName ActorClassAttribute = TEXT("ActorClass");
@@ -233,21 +219,57 @@ public:
 
 class UPCGComponent;
 class UDeepLevelBuildingLineSplineComponent;
+struct FDeepLevelBuildingLinePlan;
 
 /** Authoring actor for one open or closed building frontage. Buildings spawn on spline-right. */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
-class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor
+class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor, public IDeepLevelCityLayoutProvider
 {
 	GENERATED_BODY()
 
 public:
 	ADeepLevelPCGBuildingLineActor();
+	virtual void PostLoad() override;
+	virtual void PostActorCreated() override;
+	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	TSoftObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	int32 RandomSeed = 1337;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line|Variation", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	double VarietyStrength = 1.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line|Variation", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	double CornerPreference = 1.0;
+
+	bool ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
+	virtual bool BuildCityLayoutFragment(
+		const FDeepLevelCityGrid& Grid,
+		FDeepLevelCityLayoutFragment& OutFragment,
+		FText& OutError) const override;
+	void NotifyBuildingLayoutChanged();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|PCG|Components")
 	TObjectPtr<UDeepLevelBuildingLineSplineComponent> BuildingLine;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|PCG|Components")
 	TObjectPtr<UPCGComponent> PCGComponent;
+
+private:
+	void EnsureLayoutSourceGuid();
+	bool BuildPlan(FDeepLevelBuildingLinePlan& OutPlan, FText& OutError) const;
+
+	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Building Line")
+	FGuid LayoutSourceGuid;
+
+	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Building Line")
+	int32 LayoutRevision = 0;
 };
 
 struct FDeepLevelBuildingLinePathSample

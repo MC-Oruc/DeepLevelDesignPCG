@@ -10,6 +10,7 @@
 #include "GameFramework/Character.h"
 #include "Misc/AutomationTest.h"
 #include "PCGModule.h"
+#include "PackedLevelActor/PackedLevelActor.h"
 
 namespace DeepLevelBuildingLinePlannerTests
 {
@@ -651,11 +652,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Parameters)
 {
-	const UDeepLevelBuildingLinePCGSettings* Settings = NewObject<UDeepLevelBuildingLinePCGSettings>();
-	TestEqual(
-		TEXT("Corner placement defaults to inner corners"),
-		Settings->CornerPlacementMask,
-		static_cast<int32>(EDeepLevelCornerPlacementFlags::Inner));
+	const int32 DefaultCornerMask = static_cast<int32>(EDeepLevelCornerPlacementFlags::Inner);
 	const UClass* AuthoringBlueprintClass = LoadClass<ADeepLevelPCGBuildingLineActor>(
 		nullptr,
 		TEXT("/DeepLevelDesignPCG/Building/BP_DeepLevelBuildingLine.BP_DeepLevelBuildingLine_C"));
@@ -670,18 +667,6 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 				TEXT("Building line Blueprint exposes per-spline corner placement"),
 				AuthoringBlueprintCDO->BuildingLine->IsA<UDeepLevelBuildingLineSplineComponent>());
 		}
-	}
-	const FIntProperty* CornerPlacementProperty = FindFProperty<FIntProperty>(
-		UDeepLevelBuildingLinePCGSettings::StaticClass(),
-		GET_MEMBER_NAME_CHECKED(UDeepLevelBuildingLinePCGSettings, CornerPlacementMask));
-	TestNotNull(TEXT("Corner placement mask is reflected"), CornerPlacementProperty);
-	if (CornerPlacementProperty)
-	{
-		TestTrue(TEXT("Corner placement uses the Details bitmask editor"), CornerPlacementProperty->HasMetaData(TEXT("Bitmask")));
-		TestEqual(
-			TEXT("Corner placement references the native flag enum"),
-			CornerPlacementProperty->GetMetaData(TEXT("BitmaskEnum")),
-			FString(TEXT("/Script/DeepLevelDesignPCG.EDeepLevelCornerPlacementFlags")));
 	}
 	UWorld* TestWorld = UWorld::CreateWorld(
 		EWorldType::Game,
@@ -758,7 +743,7 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 			TEXT("Produced spline metadata resolves without manual graph attributes"),
 			FDeepLevelBuildingLineCornerPolicy::Resolve(
 				*AuthoredSplineData,
-				Settings->CornerPlacementMask,
+				DefaultCornerMask,
 				AuthoredFlags,
 				ProducerError));
 		TestEqual(
@@ -773,7 +758,7 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 	FText Error;
 	TestTrue(
 		TEXT("Spline without metadata uses the node mask"),
-		FDeepLevelBuildingLineCornerPolicy::Resolve(*DefaultSpline, Settings->CornerPlacementMask, ResolvedFlags, Error));
+		FDeepLevelBuildingLineCornerPolicy::Resolve(*DefaultSpline, DefaultCornerMask, ResolvedFlags, Error));
 	TestEqual(
 		TEXT("Node mask resolves to inner corners"),
 		static_cast<uint8>(ResolvedFlags),
@@ -787,7 +772,7 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 		false);
 	TestTrue(
 		TEXT("Spline metadata resolves a valid override"),
-		FDeepLevelBuildingLineCornerPolicy::Resolve(*OverrideSpline, Settings->CornerPlacementMask, ResolvedFlags, Error));
+		FDeepLevelBuildingLineCornerPolicy::Resolve(*OverrideSpline, DefaultCornerMask, ResolvedFlags, Error));
 	TestEqual(
 		TEXT("Spline metadata overrides the node mask"),
 		static_cast<uint8>(ResolvedFlags),
@@ -801,7 +786,7 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 		false);
 	TestFalse(
 		TEXT("Spline metadata rejects unsupported mask bits"),
-		FDeepLevelBuildingLineCornerPolicy::Resolve(*InvalidSpline, Settings->CornerPlacementMask, ResolvedFlags, Error));
+		FDeepLevelBuildingLineCornerPolicy::Resolve(*InvalidSpline, DefaultCornerMask, ResolvedFlags, Error));
 	TestFalse(
 		TEXT("Node setting rejects unsupported mask bits"),
 		FDeepLevelBuildingLineCornerPolicy::Resolve(*DefaultSpline, 4, ResolvedFlags, Error));
@@ -814,7 +799,7 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 		false);
 	TestFalse(
 		TEXT("Spline metadata rejects a non-integer corner policy"),
-		FDeepLevelBuildingLineCornerPolicy::Resolve(*WrongTypeSpline, Settings->CornerPlacementMask, ResolvedFlags, Error));
+		FDeepLevelBuildingLineCornerPolicy::Resolve(*WrongTypeSpline, DefaultCornerMask, ResolvedFlags, Error));
 
 	UDeepLevelBuildingPlacementCatalog* Catalog = NewObject<UDeepLevelBuildingPlacementCatalog>();
 	FDeepLevelBuildingPlacementDefinition Building = DeepLevelBuildingLinePlannerTests::MakeBuilding(AActor::StaticClass(), 200.0);
@@ -1149,6 +1134,67 @@ bool FDeepLevelBuildingLineVisualScaleCooldownTest::RunTest(const FString& Param
 		LastLargeDistance = Placement.Distance;
 	}
 	TestTrue(TEXT("Large building repeats are physically separated"), MinimumLargeRepeatDistance >= 800.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepLevelBuildingLayoutFragmentTest,
+	"DeepLevelDesignPCG.Editor.BuildingLine.LayoutFragment",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelBuildingLayoutFragmentTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("DeepLevelBuildingLayoutFragmentWorld"), nullptr, false);
+	if (!TestNotNull(TEXT("Building fragment test world is created"), World))
+	{
+		return false;
+	}
+	ADeepLevelCityLayoutActor* CityLayout = World->SpawnActor<ADeepLevelCityLayoutActor>();
+	CityLayout->GridProfile = NewObject<UDeepLevelCityGridProfile>(CityLayout);
+	CityLayout->SetActorLocation(FVector(100.0, 200.0, 300.0));
+	ADeepLevelPCGBuildingLineActor* BuildingActor = World->SpawnActor<ADeepLevelPCGBuildingLineActor>();
+	BuildingActor->CityLayout = CityLayout;
+	UDeepLevelBuildingPlacementCatalog* Catalog = NewObject<UDeepLevelBuildingPlacementCatalog>(BuildingActor);
+	FDeepLevelBuildingPlacementDefinition Definition = DeepLevelBuildingLinePlannerTests::MakeBuilding(APackedLevelActor::StaticClass(), 500.0);
+	Definition.bCalibrated = true;
+	Catalog->Buildings.Add(Definition);
+	BuildingActor->Catalog = Catalog;
+	BuildingActor->BuildingLine->ClearSplinePoints(false);
+	BuildingActor->BuildingLine->AddSplinePoint(FVector::ZeroVector, ESplineCoordinateSpace::Local, false);
+	BuildingActor->BuildingLine->AddSplinePoint(FVector(2000.0, 0.0, 0.0), ESplineCoordinateSpace::Local, true);
+
+	FDeepLevelCityGrid Grid;
+	FText Error;
+	TestTrue(TEXT("Shared city grid resolves"), CityLayout->ResolveGrid(Grid, Error));
+	FDeepLevelCityLayoutFragment First;
+	FDeepLevelCityLayoutFragment Second;
+	if (!TestTrue(TEXT("Building fragment builds"), BuildingActor->BuildCityLayoutFragment(Grid, First, Error)))
+	{
+		AddError(Error.ToString());
+		World->DestroyWorld(false);
+		return false;
+	}
+	TestTrue(TEXT("Building fragment rebuilds"), BuildingActor->BuildCityLayoutFragment(Grid, Second, Error));
+	TestTrue(TEXT("Building fragment has a stable source identity"), First.SourceGuid.IsValid());
+	TestTrue(TEXT("Building footprints occupy shared grid cells"), !First.Cells.IsEmpty());
+	TestTrue(TEXT("Building fragment emits facade and corner anchors"), !First.Anchors.IsEmpty() && First.Anchors.Num() % 8 == 0);
+	TestEqual(TEXT("Repeated building fragments preserve anchor count"), Second.Anchors.Num(), First.Anchors.Num());
+	for (int32 Index = 0; Index < First.Anchors.Num(); ++Index)
+	{
+		const FDeepLevelCityAnchor& Anchor = First.Anchors[Index];
+		TestEqual(TEXT("Repeated building fragments preserve stable IDs"), Second.Anchors[Index].StableId, Anchor.StableId);
+		TestTrue(TEXT("Building anchors retain rasterized footprint cells"), !Anchor.OccupiedCells.IsEmpty());
+		TestTrue(
+			TEXT("Building anchors are classified as facade or corner"),
+			Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Building_Facade)
+				|| Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Building_Corner));
+	}
+	for (const FDeepLevelCityCellState& Cell : First.Cells)
+	{
+		TestTrue(TEXT("Rasterized cells carry Building occupancy"),
+			(Cell.OccupancyMask & static_cast<int32>(EDeepLevelCityOccupancy::Building)) != 0);
+	}
+	World->DestroyWorld(false);
 	return true;
 }
 

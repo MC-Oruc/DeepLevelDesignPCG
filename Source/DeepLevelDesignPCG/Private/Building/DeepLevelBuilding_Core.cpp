@@ -9,6 +9,113 @@
 
 
 #include "PCGComponent.h"
+#include "Data/PCGSplineData.h"
+
+namespace
+{
+	const FDeepLevelBuildingPlacementDefinition* FindBuildingDefinition(
+		const UDeepLevelBuildingPlacementCatalog& Catalog,
+		const TSoftClassPtr<AActor>& BuildingClass)
+	{
+		return Catalog.Buildings.FindByPredicate([&BuildingClass](const FDeepLevelBuildingPlacementDefinition& Definition)
+		{
+			return Definition.BuildingClass.ToSoftObjectPath() == BuildingClass.ToSoftObjectPath();
+		});
+	}
+
+	void MakeFootprintCorners(
+		const FDeepLevelBuildingPlacementVolume& Volume,
+		const FTransform& ActorTransform,
+		TStaticArray<FVector2D, 4>& OutCorners)
+	{
+		const FTransform VolumeTransform = FTransform(Volume.Rotation, Volume.Center) * ActorTransform;
+		OutCorners[0] = FVector2D(VolumeTransform.TransformPosition(FVector(-Volume.Extent.X, -Volume.Extent.Y, 0.0)));
+		OutCorners[1] = FVector2D(VolumeTransform.TransformPosition(FVector( Volume.Extent.X, -Volume.Extent.Y, 0.0)));
+		OutCorners[2] = FVector2D(VolumeTransform.TransformPosition(FVector( Volume.Extent.X,  Volume.Extent.Y, 0.0)));
+		OutCorners[3] = FVector2D(VolumeTransform.TransformPosition(FVector(-Volume.Extent.X,  Volume.Extent.Y, 0.0)));
+	}
+
+	void ProjectPolygon(
+		const TStaticArray<FVector2D, 4>& Corners,
+		const FVector2D& Axis,
+		double& OutMin,
+		double& OutMax)
+	{
+		OutMin = FVector2D::DotProduct(Corners[0], Axis);
+		OutMax = OutMin;
+		for (int32 Index = 1; Index < Corners.Num(); ++Index)
+		{
+			const double Projection = FVector2D::DotProduct(Corners[Index], Axis);
+			OutMin = FMath::Min(OutMin, Projection);
+			OutMax = FMath::Max(OutMax, Projection);
+		}
+	}
+
+	bool FootprintOverlapsCell(
+		const TStaticArray<FVector2D, 4>& Footprint,
+		const FVector2D& CellCenter,
+		const double HalfTile)
+	{
+		TStaticArray<FVector2D, 4> Cell = {
+			CellCenter + FVector2D(-HalfTile, -HalfTile),
+			CellCenter + FVector2D( HalfTile, -HalfTile),
+			CellCenter + FVector2D( HalfTile,  HalfTile),
+			CellCenter + FVector2D(-HalfTile,  HalfTile)};
+		const FVector2D EdgeA = (Footprint[1] - Footprint[0]).GetSafeNormal();
+		const FVector2D EdgeB = (Footprint[3] - Footprint[0]).GetSafeNormal();
+		const FVector2D Axes[] = {
+			FVector2D::UnitX(), FVector2D::UnitY(),
+			FVector2D(-EdgeA.Y, EdgeA.X), FVector2D(-EdgeB.Y, EdgeB.X)};
+		for (const FVector2D& Axis : Axes)
+		{
+			double FootprintMin;
+			double FootprintMax;
+			double CellMin;
+			double CellMax;
+			ProjectPolygon(Footprint, Axis, FootprintMin, FootprintMax);
+			ProjectPolygon(Cell, Axis, CellMin, CellMax);
+			if (FootprintMax <= CellMin + UE_DOUBLE_KINDA_SMALL_NUMBER
+				|| CellMax <= FootprintMin + UE_DOUBLE_KINDA_SMALL_NUMBER)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void RasterizeFootprint(
+		const FDeepLevelCityGrid& Grid,
+		const TStaticArray<FVector2D, 4>& Footprint,
+		TArray<FIntPoint>& OutCells)
+	{
+		FBox2D Bounds(ForceInit);
+		for (const FVector2D& Corner : Footprint)
+		{
+			Bounds += Corner;
+		}
+		const double HalfTile = Grid.TileSize * 0.5;
+		const int32 MinX = FMath::CeilToInt((Bounds.Min.X - Grid.Origin.X - HalfTile) / Grid.TileSize);
+		const int32 MaxX = FMath::FloorToInt((Bounds.Max.X - Grid.Origin.X + HalfTile) / Grid.TileSize);
+		const int32 MinY = FMath::CeilToInt((Bounds.Min.Y - Grid.Origin.Y - HalfTile) / Grid.TileSize);
+		const int32 MaxY = FMath::FloorToInt((Bounds.Max.Y - Grid.Origin.Y + HalfTile) / Grid.TileSize);
+		for (int32 X = MinX; X <= MaxX; ++X)
+		{
+			for (int32 Y = MinY; Y <= MaxY; ++Y)
+			{
+				const FIntPoint Cell(X, Y);
+				if (FootprintOverlapsCell(Footprint, FVector2D(Grid.CellToWorld(Cell)), HalfTile))
+				{
+					OutCells.Add(Cell);
+				}
+			}
+		}
+	}
+
+	FTransform MakeAnchorTransform(const FVector& Location, const FVector& Tangent, const FVector& Normal)
+	{
+		return FTransform(FRotationMatrix::MakeFromXZ(Tangent.GetSafeNormal(), Normal.GetSafeNormal()).ToQuat(), Location);
+	}
+}
 
 ADeepLevelPCGBuildingLineActor::ADeepLevelPCGBuildingLineActor()
 {
@@ -19,6 +126,206 @@ ADeepLevelPCGBuildingLineActor::ADeepLevelPCGBuildingLineActor()
 	BuildingLine->SetClosedLoop(false);
 
 	PCGComponent = CreateDefaultSubobject<UPCGComponent>(TEXT("PCGComponent"));
+}
+
+void ADeepLevelPCGBuildingLineActor::PostLoad()
+{
+	Super::PostLoad();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelPCGBuildingLineActor::PostActorCreated()
+{
+	Super::PostActorCreated();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelPCGBuildingLineActor::PostDuplicate(const EDuplicateMode::Type DuplicateMode)
+{
+	Super::PostDuplicate(DuplicateMode);
+	LayoutSourceGuid = FGuid::NewGuid();
+	LayoutRevision = 0;
+}
+
+void ADeepLevelPCGBuildingLineActor::EnsureLayoutSourceGuid()
+{
+	if (!LayoutSourceGuid.IsValid())
+	{
+		LayoutSourceGuid = FGuid::NewGuid();
+	}
+}
+
+bool ADeepLevelPCGBuildingLineActor::ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const
+{
+	if (!CityLayout)
+	{
+		OutError = NSLOCTEXT("DeepLevelBuildingLine", "MissingCityLayout", "Building Line requires a City Layout actor.");
+		return false;
+	}
+	return CityLayout->ResolveGrid(OutGrid, OutError);
+}
+
+bool ADeepLevelPCGBuildingLineActor::BuildPlan(FDeepLevelBuildingLinePlan& OutPlan, FText& OutError) const
+{
+	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog)
+	{
+		OutError = NSLOCTEXT("DeepLevelBuildingLine", "MissingCatalog", "Building Line requires a Building Placement Catalog.");
+		return false;
+	}
+	if (!LoadedCatalog->ValidateForGeneration(OutError))
+	{
+		return false;
+	}
+
+	UPCGSplineData* SplineData = NewObject<UPCGSplineData>();
+	SplineData->Initialize(BuildingLine);
+	FDeepLevelBuildingLinePath Path;
+	if (!FDeepLevelBuildingLinePath::Build(*SplineData, Path, OutError))
+	{
+		return false;
+	}
+	EDeepLevelCornerPlacementFlags CornerPlacement;
+	if (!FDeepLevelBuildingLineCornerPolicy::Resolve(
+		*SplineData, BuildingLine->CornerPlacementMask, CornerPlacement, OutError))
+	{
+		return false;
+	}
+	return FDeepLevelBuildingLinePlanner::BuildPlan(
+		*LoadedCatalog,
+		Path,
+		RandomSeed,
+		VarietyStrength,
+		CornerPreference,
+		CornerPlacement,
+		OutPlan,
+		OutError);
+}
+
+bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
+	const FDeepLevelCityGrid& Grid,
+	FDeepLevelCityLayoutFragment& OutFragment,
+	FText& OutError) const
+{
+	OutFragment = {};
+	FDeepLevelCityGrid OwnedGrid;
+	if (!ResolveCityGrid(OwnedGrid, OutError))
+	{
+		return false;
+	}
+	if (!OwnedGrid.Origin.Equals(Grid.Origin, 0.01)
+		|| !FMath::IsNearlyEqual(OwnedGrid.TileSize, Grid.TileSize, 0.01)
+		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells
+		|| OwnedGrid.ExtentInCells != Grid.ExtentInCells)
+	{
+		OutError = NSLOCTEXT("DeepLevelBuildingLine", "ForeignCityGrid", "Building Line cannot build a fragment for a different City Layout grid.");
+		return false;
+	}
+
+	FDeepLevelBuildingLinePlan Plan;
+	if (!BuildPlan(Plan, OutError))
+	{
+		return false;
+	}
+	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	OutFragment.SourceGuid = LayoutSourceGuid;
+	OutFragment.SourceRevision = LayoutRevision;
+	TSet<FIntPoint> OccupiedCells;
+	for (const FDeepLevelBuildingLinePlacement& Placement : Plan.Placements)
+	{
+		const FDeepLevelBuildingPlacementDefinition* Definition = FindBuildingDefinition(*LoadedCatalog, Placement.BuildingClass);
+		check(Definition);
+		const FTransform ActorTransform = FDeepLevelBuildingPlacementGeometry::BuildActorTransform(
+			*Definition,
+			Placement.StreetFace,
+			Placement.PathSample.Location,
+			Placement.PathSample.Forward,
+			Placement.PathSample.Right);
+		const FTransform VolumeTransform = FTransform(
+			Definition->PlacementVolume.Rotation,
+			Definition->PlacementVolume.Center) * ActorTransform;
+		TStaticArray<FVector2D, 4> Footprint;
+		MakeFootprintCorners(Definition->PlacementVolume, ActorTransform, Footprint);
+		TArray<FIntPoint> PlacementCells;
+		RasterizeFootprint(Grid, Footprint, PlacementCells);
+		for (const FIntPoint& Cell : PlacementCells)
+		{
+			OccupiedCells.Add(Cell);
+		}
+
+		const FString PlacementKey = FString::Printf(
+			TEXT("Building:%lld:%lld:%s"),
+			FMath::RoundToInt64(Placement.CoverageStart * 100.0),
+			FMath::RoundToInt64(Placement.CoverageEnd * 100.0),
+			*Placement.BuildingClass.ToSoftObjectPath().ToString());
+		const FVector LocalNormals[] = {
+			FVector::ForwardVector, -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector};
+		const FName FacadeSlots[] = {TEXT("FacadePX"), TEXT("FacadeNX"), TEXT("FacadePY"), TEXT("FacadeNY")};
+		for (int32 FaceIndex = 0; FaceIndex < 4; ++FaceIndex)
+		{
+			const FVector LocalNormal = LocalNormals[FaceIndex];
+			const bool bXAxisFace = FaceIndex < 2;
+			const FVector LocalTangent = bXAxisFace ? FVector::RightVector : FVector::ForwardVector;
+			const double NormalExtent = bXAxisFace ? Definition->PlacementVolume.Extent.X : Definition->PlacementVolume.Extent.Y;
+			const double TangentExtent = bXAxisFace ? Definition->PlacementVolume.Extent.Y : Definition->PlacementVolume.Extent.X;
+			const FVector LocalCenter = LocalNormal * NormalExtent;
+			FDeepLevelCityAnchor& Facade = OutFragment.Anchors.Emplace_GetRef();
+			Facade.StableId = FDeepLevelCityStableId::MakeAnchorId(LayoutSourceGuid, PlacementKey, FacadeSlots[FaceIndex]);
+			Facade.Geometry = EDeepLevelCityAnchorGeometry::Segment;
+			Facade.Transform = MakeAnchorTransform(
+				VolumeTransform.TransformPosition(LocalCenter),
+				VolumeTransform.TransformVectorNoScale(LocalTangent),
+				VolumeTransform.TransformVectorNoScale(LocalNormal));
+			Facade.Extent = FVector(TangentExtent, Definition->PlacementVolume.Extent.Z, 0.0);
+			Facade.ClearanceDepth = NormalExtent;
+			Facade.Tags.AddTag(DeepLevelCityTags::Anchor_Building_Facade);
+			Facade.OccupiedCells = PlacementCells;
+			Facade.SourceRevision = LayoutRevision;
+		}
+
+		const FVector2D CornerSigns[] = {
+			FVector2D(1.0, 1.0), FVector2D(1.0, -1.0), FVector2D(-1.0, -1.0), FVector2D(-1.0, 1.0)};
+		const FName CornerSlots[] = {TEXT("CornerPP"), TEXT("CornerPN"), TEXT("CornerNN"), TEXT("CornerNP")};
+		for (int32 CornerIndex = 0; CornerIndex < 4; ++CornerIndex)
+		{
+			const FVector LocalCorner(
+				CornerSigns[CornerIndex].X * Definition->PlacementVolume.Extent.X,
+				CornerSigns[CornerIndex].Y * Definition->PlacementVolume.Extent.Y,
+				0.0);
+			const FVector LocalNormal(CornerSigns[CornerIndex].X, CornerSigns[CornerIndex].Y, 0.0);
+			FDeepLevelCityAnchor& Corner = OutFragment.Anchors.Emplace_GetRef();
+			Corner.StableId = FDeepLevelCityStableId::MakeAnchorId(LayoutSourceGuid, PlacementKey, CornerSlots[CornerIndex]);
+			Corner.Geometry = EDeepLevelCityAnchorGeometry::Point;
+			Corner.Transform = MakeAnchorTransform(
+				VolumeTransform.TransformPosition(LocalCorner),
+				VolumeTransform.TransformVectorNoScale(FVector(-LocalNormal.Y, LocalNormal.X, 0.0)),
+				VolumeTransform.TransformVectorNoScale(LocalNormal));
+			Corner.Tags.AddTag(DeepLevelCityTags::Anchor_Building_Corner);
+			Corner.OccupiedCells = PlacementCells;
+			Corner.SourceRevision = LayoutRevision;
+		}
+	}
+
+	OutFragment.Cells.Reserve(OccupiedCells.Num());
+	TArray<FIntPoint> SortedCells = OccupiedCells.Array();
+	SortedCells.Sort([](const FIntPoint& A, const FIntPoint& B) { return A.X == B.X ? A.Y < B.Y : A.X < B.X; });
+	for (const FIntPoint& CellCoordinate : SortedCells)
+	{
+		FDeepLevelCityCellState& Cell = OutFragment.Cells.Emplace_GetRef();
+		Cell.Cell = CellCoordinate;
+		Cell.OccupancyMask = static_cast<int32>(EDeepLevelCityOccupancy::Building);
+		Cell.Tags.AddTag(DeepLevelCityTags::Cell_Building);
+	}
+	return true;
+}
+
+void ADeepLevelPCGBuildingLineActor::NotifyBuildingLayoutChanged()
+{
+	++LayoutRevision;
+	if (PCGComponent)
+	{
+		PCGComponent->NotifyPropertiesChangedFromBlueprint();
+	}
 }
 
 // ---- DeepLevelBuildingLineSplineComponent ----
@@ -35,12 +342,9 @@ void UDeepLevelBuildingLineSplineComponent::PostEditChangeProperty(FPropertyChan
 		return;
 	}
 
-	if (const AActor* Owner = GetOwner())
+	if (ADeepLevelPCGBuildingLineActor* Owner = Cast<ADeepLevelPCGBuildingLineActor>(GetOwner()))
 	{
-		if (UPCGComponent* PCGComponent = Owner->FindComponentByClass<UPCGComponent>())
-		{
-			PCGComponent->NotifyPropertiesChangedFromBlueprint();
-		}
+		Owner->NotifyBuildingLayoutChanged();
 	}
 }
 #endif
@@ -51,7 +355,6 @@ void UDeepLevelBuildingLineSplineComponent::PostEditChangeProperty(FPropertyChan
 #include "PCGContext.h"
 #include "Data/PCGBasePointData.h"
 #include "Data/PCGPointData.h"
-#include "Data/PCGSplineData.h"
 #include "Metadata/PCGMetadata.h"
 
 #define LOCTEXT_NAMESPACE "DeepLevelBuildingLinePCGSettings"
@@ -130,14 +433,32 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 	const UDeepLevelBuildingLinePCGSettings* Settings = Context->GetInputSettings<UDeepLevelBuildingLinePCGSettings>();
 	check(Settings);
 
-	UDeepLevelBuildingPlacementCatalog* Catalog = Settings->Catalog.LoadSynchronous();
+	UPCGComponent* SourceComponent = Cast<UPCGComponent>(Context->ExecutionSource.Get());
+	UPCGComponent* OriginalComponent = SourceComponent ? SourceComponent->GetOriginalComponent() : nullptr;
+	const ADeepLevelPCGBuildingLineActor* BuildingActor = OriginalComponent
+		? Cast<ADeepLevelPCGBuildingLineActor>(OriginalComponent->GetOwner())
+		: nullptr;
+	if (!BuildingActor)
+	{
+		DeepLevelBuildingLinePCG::ReportGenerationError(
+			LOCTEXT("InvalidOwner", "DeepLevel Building Line node must run on a DeepLevel Building Line actor."), Context);
+		return true;
+	}
+	FDeepLevelCityGrid Grid;
+	FText ValidationError;
+	if (!BuildingActor->ResolveCityGrid(Grid, ValidationError))
+	{
+		DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
+		return true;
+	}
+
+	UDeepLevelBuildingPlacementCatalog* Catalog = BuildingActor->Catalog.LoadSynchronous();
 	if (!Catalog)
 	{
 		DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("MissingCatalog", "DeepLevel Building Line has no valid catalog."), Context);
 		return true;
 	}
 
-	FText ValidationError;
 	if (!Catalog->ValidateForGeneration(ValidationError))
 	{
 		DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
@@ -163,7 +484,7 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		EDeepLevelCornerPlacementFlags CornerPlacement;
 		if (!FDeepLevelBuildingLineCornerPolicy::Resolve(
 			*Spline,
-			Settings->CornerPlacementMask,
+			BuildingActor->BuildingLine->CornerPlacementMask,
 			CornerPlacement,
 			ValidationError))
 		{
@@ -175,9 +496,9 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		if (!FDeepLevelBuildingLinePlanner::BuildPlan(
 			*Catalog,
 			Path,
-			Settings->RandomSeed,
-			Settings->VarietyStrength,
-			Settings->CornerPreference,
+			BuildingActor->RandomSeed,
+			BuildingActor->VarietyStrength,
+			BuildingActor->CornerPreference,
 			CornerPlacement,
 			Plan,
 			ValidationError))
@@ -214,7 +535,7 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 				PlannedPlacement.PathSample.Forward,
 				PlannedPlacement.PathSample.Right);
 			Point.Density = 1.0f;
-			Point.Seed = HashCombineFast(Settings->RandomSeed, Points.Num() - 1);
+			Point.Seed = HashCombineFast(BuildingActor->RandomSeed, Points.Num() - 1);
 			Point.MetadataEntry = OutputData->MutableMetadata()->AddEntry();
 			ActorClassAttribute->SetValue(Point.MetadataEntry, FSoftClassPath(PlannedPlacement.BuildingClass.ToSoftObjectPath().ToString()));
 		}

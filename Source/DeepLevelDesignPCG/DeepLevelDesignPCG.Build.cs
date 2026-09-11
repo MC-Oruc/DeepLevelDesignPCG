@@ -14,6 +14,8 @@ public class DeepLevelDesignPCG : ModuleRules
                 "Core",
                 "CoreUObject",
                 "Engine",
+                // Public city layout contracts expose gameplay tags.
+                "GameplayTags",
                 "PCG",
             });
     }

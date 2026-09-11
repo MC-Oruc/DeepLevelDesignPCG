@@ -61,7 +61,7 @@ namespace DeepLevelRoadNetworkPlannerTests
 	UDeepLevelRoadTileCatalog* MakeCatalog()
 	{
 		UDeepLevelRoadTileCatalog* Catalog = NewObject<UDeepLevelRoadTileCatalog>();
-		Catalog->GridCellSize = 500.0;
+		Catalog->GridProfile = NewObject<UDeepLevelCityGridProfile>(Catalog);
 		Catalog->SidewalkWidthInTiles = 2;
 		Catalog->Tiles = {
 			MakeTile(TestPositiveX),
@@ -73,6 +73,11 @@ namespace DeepLevelRoadNetworkPlannerTests
 			MakeTile()
 		};
 		return Catalog;
+	}
+
+	FDeepLevelCityGrid MakeGrid()
+	{
+		return {FVector::ZeroVector, 500.0, 16};
 	}
 }
 
@@ -94,7 +99,7 @@ bool FDeepLevelRoadNetworkCrossingTest::RunTest(const FString& Parameters)
 	FDeepLevelRoadNetworkPlan FirstPlan;
 	FText Error;
 	TestTrue(TEXT("Crossing network builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, FirstPlan, Error));
+		*Catalog, Splines, MakeGrid(), 41, FirstPlan, Error));
 	TestEqual(TEXT("Crossing has nine unique road cells"), FirstPlan.RoadCellCount, 9);
 	TestTrue(TEXT("Sidewalk ring is generated"), FirstPlan.SidewalkCellCount > 0);
 
@@ -132,7 +137,7 @@ bool FDeepLevelRoadNetworkCrossingTest::RunTest(const FString& Parameters)
 
 	FDeepLevelRoadNetworkPlan SecondPlan;
 	TestTrue(TEXT("Same network rebuilds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, SecondPlan, Error));
+		*Catalog, Splines, MakeGrid(), 41, SecondPlan, Error));
 	TestEqual(TEXT("Deterministic placement count"), SecondPlan.Placements.Num(), FirstPlan.Placements.Num());
 	for (int32 Index = 0; Index < FirstPlan.Placements.Num() && Index < SecondPlan.Placements.Num(); ++Index)
 	{
@@ -160,7 +165,7 @@ bool FDeepLevelRoadNetworkExteriorCornerSidewalkTest::RunTest(const FString& Par
 	FDeepLevelRoadNetworkPlan Plan;
 	FText Error;
 	TestTrue(TEXT("Corner road network builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, Plan, Error));
+		*Catalog, Splines, MakeGrid(), 41, Plan, Error));
 
 	TSet<FIntPoint> SidewalkCells;
 	for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
@@ -220,19 +225,19 @@ bool FDeepLevelRoadSplineValidationTest::RunTest(const FString& Parameters)
 	FText Error;
 
 	UPCGSplineData* Curved = MakeSpline(FVector::ZeroVector, FVector(1000.0, 0.0, 0.0), ESplinePointType::Curve);
-	TestFalse(TEXT("Curved spline is rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {Curved}, FVector::ZeroVector, 1, Plan, Error));
+	TestFalse(TEXT("Curved spline is rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {Curved}, MakeGrid(), 1, Plan, Error));
 	TestTrue(TEXT("Curved spline error explains Linear point type"), Error.ToString().Contains(TEXT("Linear")));
 
 	UPCGSplineData* Diagonal = MakeSpline(FVector::ZeroVector, FVector(1000.0, 1000.0, 0.0));
-	TestFalse(TEXT("Diagonal linear segment is rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {Diagonal}, FVector::ZeroVector, 1, Plan, Error));
+	TestFalse(TEXT("Diagonal linear segment is rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {Diagonal}, MakeGrid(), 1, Plan, Error));
 	TestTrue(TEXT("Diagonal error explains grid-axis requirement"), Error.ToString().Contains(TEXT("grid axis")));
 
 	UPCGSplineData* OffGrid = MakeSpline(FVector(250.0, 0.0, 0.0), FVector(1250.0, 0.0, 0.0));
-	TestTrue(TEXT("Off-grid points snap to the nearest cells"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {OffGrid}, FVector::ZeroVector, 1, Plan, Error));
+	TestTrue(TEXT("Off-grid points snap to the nearest cells"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {OffGrid}, MakeGrid(), 1, Plan, Error));
 	TestTrue(TEXT("Snapped off-grid spline creates road cells"), Plan.RoadCellCount > 0);
 
 	UPCGSplineData* NearlyVertical = MakeSpline(FVector(0.2, 0.1, 0.0), FVector(-0.3, 1499.8, 0.0));
-	TestTrue(TEXT("Small authoring drift still resolves to an axis-aligned road"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {NearlyVertical}, FVector::ZeroVector, 1, Plan, Error));
+	TestTrue(TEXT("Small authoring drift still resolves to an axis-aligned road"), FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, {NearlyVertical}, MakeGrid(), 1, Plan, Error));
 	return true;
 }
 
@@ -255,7 +260,7 @@ bool FDeepLevelRoadSplineTransformTest::RunTest(const FString& Parameters)
 	FDeepLevelRoadNetworkPlan Plan;
 	FText Error;
 	TestTrue(TEXT("Transformed spline builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, {Spline}, FVector::ZeroVector, 17, Plan, Error));
+		*Catalog, {Spline}, MakeGrid(), 17, Plan, Error));
 	TestEqual(TEXT("Transformed spline occupies three cells"), Plan.RoadCellCount, 3);
 
 	TSet<FIntPoint> RoadCells;
@@ -289,7 +294,7 @@ bool FDeepLevelRoadJunctionDistanceTest::RunTest(const FString& Parameters)
 			MakeSpline(FVector(-500.0, 0.0, 0.0), FVector(EndWorldX + 500.0, 0.0, 0.0)),
 			MakeSpline(FVector::ZeroVector, FVector(0.0, 500.0, 0.0)),
 			MakeSpline(FVector(EndWorldX, 0.0, 0.0), FVector(EndWorldX, 500.0, 0.0))};
-		return FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, FVector::ZeroVector, 17, OutPlan, Error);
+		return FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, MakeGrid(), 17, OutPlan, Error);
 	};
 
 	FDeepLevelRoadNetworkPlan AdjacentPlan;
@@ -339,7 +344,7 @@ bool FDeepLevelRoadParallelSurfaceTest::RunTest(const FString& Parameters)
 			MakeSpline(FVector(-1000.0, OtherY, 0.0), FVector(1000.0, OtherY, 0.0))};
 		FDeepLevelRoadNetworkPlan Plan;
 		TestTrue(FString::Printf(TEXT("Parallel road distance %d builds"), RowDistance),
-			FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, FVector::ZeroVector, 29, Plan, Error));
+			FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, MakeGrid(), 29, Plan, Error));
 
 		TSet<FIntPoint> RoadCells;
 		TSet<FIntPoint> SidewalkCells;
@@ -379,7 +384,7 @@ bool FDeepLevelRoadWideIntersectionTest::RunTest(const FString& Parameters)
 	FDeepLevelRoadNetworkPlan Plan;
 	FText Error;
 	TestTrue(TEXT("Two-by-two wide intersection builds"),
-		FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, FVector::ZeroVector, 31, Plan, Error));
+		FDeepLevelRoadNetworkPlanner::BuildPlan(*Catalog, Splines, MakeGrid(), 31, Plan, Error));
 
 	TSet<FIntPoint> JunctionCells;
 	for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
@@ -412,7 +417,7 @@ bool FDeepLevelRoadCellOverrideTest::RunTest(const FString& Parameters)
 	FText Error;
 	FDeepLevelRoadNetworkPlan BasePlan;
 	TestTrue(TEXT("Base road network builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, BasePlan, Error));
+		*Catalog, Splines, MakeGrid(), 41, BasePlan, Error));
 
 	FDeepLevelRoadCellOverride Modify;
 	Modify.GridCell = FIntPoint::ZeroValue;
@@ -434,7 +439,7 @@ bool FDeepLevelRoadCellOverrideTest::RunTest(const FString& Parameters)
 
 	FDeepLevelRoadNetworkPlan OverridePlan;
 	TestTrue(TEXT("Road network with final-placement overrides builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, OverridePlan, Error, Overrides));
+		*Catalog, Splines, MakeGrid(), 41, OverridePlan, Error, Overrides));
 	TestEqual(TEXT("Remove and Add preserve total placement count"), OverridePlan.Placements.Num(), BasePlan.Placements.Num());
 	TestFalse(TEXT("Removed cell has no placement"), OverridePlan.Placements.ContainsByPredicate([](const FDeepLevelRoadTilePlacement& Placement)
 	{
@@ -482,7 +487,7 @@ bool FDeepLevelRoadCellOverrideTest::RunTest(const FString& Parameters)
 	Duplicate.Mode = EDeepLevelRoadCellOverrideMode::Remove;
 	const TArray<FDeepLevelRoadCellOverride> DuplicateOverrides = {Modify, Duplicate};
 	TestFalse(TEXT("Duplicate overrides are rejected"), FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*Catalog, Splines, FVector::ZeroVector, 41, OverridePlan, Error, DuplicateOverrides));
+		*Catalog, Splines, MakeGrid(), 41, OverridePlan, Error, DuplicateOverrides));
 	TestFalse(TEXT("Duplicate override validation reports an error"), Error.IsEmpty());
 	return true;
 }

@@ -368,12 +368,24 @@ namespace
 		return LocalVolumeTransform.Inverse() * FTransform(Rotation, TargetCenter);
 	}
 
+	FTransform MakeSurfaceTransform(
+		const FDeepLevelRoadTileDefinition& Definition,
+		const FTransform& MeshTransform)
+	{
+		const FQuat LocalRotation = Definition.PlacementVolume.Rotation.Quaternion();
+		const FVector LocalSurfaceCenter = Definition.PlacementVolume.Center
+			+ LocalRotation.RotateVector(FVector(0.0, 0.0, Definition.PlacementVolume.Extent.Z));
+		FTransform Surface = FTransform(LocalRotation, LocalSurfaceCenter) * MeshTransform;
+		Surface.SetScale3D(FVector::OneVector);
+		return Surface;
+	}
+
 	bool AddRoadPlacement(
 		const UDeepLevelRoadTileCatalog& Catalog,
 		const FIntPoint& Cell,
 		const int32 Connections,
 		const int32 ApproachDirection,
-		const FVector& GridOrigin,
+		const FDeepLevelCityGrid& Grid,
 		const int32 Seed,
 		FDeepLevelRoadNetworkPlan& OutPlan,
 		FText& OutError)
@@ -399,7 +411,8 @@ namespace
 		FDeepLevelRoadTilePlacement& Placement = OutPlan.Placements.Emplace_GetRef();
 		Placement.TileMesh = Candidate.Definition->TileMesh;
 		Placement.TileMaterialOverride = Candidate.Definition->TileMaterialOverride;
-		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, GridOrigin, Catalog.GridCellSize, Candidate.QuarterTurns);
+		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, Grid.Origin, Grid.TileSize, Candidate.QuarterTurns);
+		Placement.SurfaceTransform = MakeSurfaceTransform(*Candidate.Definition, Placement.Transform);
 		Placement.GridCell = Cell;
 		Placement.Kind = EDeepLevelRoadTileKind::Road;
 		Placement.ConnectionMask = Connections;
@@ -500,6 +513,7 @@ namespace
 				Placement->GridCell = Override.GridCell;
 				Placement->Kind = Override.AddedTileKind;
 				Placement->Transform.SetLocation(GridOrigin + FVector(Override.GridCell.X * GridSize, Override.GridCell.Y * GridSize, 0.0));
+				Placement->SurfaceTransform = Placement->Transform;
 			}
 
 			if (!Override.ReplacementMesh.IsNull())
@@ -512,8 +526,12 @@ namespace
 			}
 
 			FTransform& Transform = Placement->Transform;
-			Transform.AddToTranslation(Transform.TransformVectorNoScale(Override.LocalOffset));
+			FTransform& SurfaceTransform = Placement->SurfaceTransform;
+			const FVector TranslationDelta = Transform.TransformVectorNoScale(Override.LocalOffset);
+			Transform.AddToTranslation(TranslationDelta);
+			SurfaceTransform.AddToTranslation(TranslationDelta);
 			Transform.ConcatenateRotation(Override.RotationOffset.Quaternion());
+			SurfaceTransform.ConcatenateRotation(Override.RotationOffset.Quaternion());
 			Transform.SetScale3D(Transform.GetScale3D() * Override.ScaleMultiplier);
 			Transform.NormalizeRotation();
 		}
@@ -531,7 +549,7 @@ namespace
 bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 	const UDeepLevelRoadTileCatalog& Catalog,
 	const TArray<const UPCGSplineData*>& Splines,
-	const FVector& GridOrigin,
+	const FDeepLevelCityGrid& Grid,
 	const int32 Seed,
 	FDeepLevelRoadNetworkPlan& OutPlan,
 	FText& OutError,
@@ -539,8 +557,14 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 {
 	OutPlan = {};
 	OutError = FText::GetEmpty();
-	if (!Catalog.ValidateForGeneration(OutError))
+	if (!Grid.Validate(OutError) || !Catalog.ValidateForGeneration(OutError))
 	{
+		return false;
+	}
+	if (!FMath::IsNearlyEqual(Grid.TileSize, Catalog.GridProfile->TileSize, 0.01)
+		|| Grid.ChunkSizeInCells != Catalog.GridProfile->ChunkSizeInCells)
+	{
+		OutError = LOCTEXT("GridProfileMismatch", "Road Tile Catalog does not match the City Layout grid.");
 		return false;
 	}
 	if (Splines.IsEmpty())
@@ -561,8 +585,8 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 		}
 		if (!AddSplineToGraph(
 			*Splines[SplineIndex],
-			GridOrigin,
-			Catalog.GridCellSize,
+			Grid.Origin,
+			Grid.TileSize,
 			SplineIndex,
 			Graph,
 			OutError))
@@ -605,7 +629,7 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 
 	for (const FIntPoint& Cell : JunctionPlacements)
 	{
-		if (!AddRoadPlacement(Catalog, Cell, Graph.Connections.FindChecked(Cell), 0, GridOrigin, Seed, OutPlan, OutError))
+		if (!AddRoadPlacement(Catalog, Cell, Graph.Connections.FindChecked(Cell), 0, Grid, Seed, OutPlan, OutError))
 		{
 			return false;
 		}
@@ -618,7 +642,7 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 			Cell,
 			Graph.Connections.FindChecked(Cell),
 			Distance.DirectionTowardJunction,
-			GridOrigin,
+			Grid,
 			Seed,
 			OutPlan,
 			OutError))
@@ -628,7 +652,7 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 	}
 	for (const FIntPoint& Cell : OrdinaryPlacements)
 	{
-		if (!AddRoadPlacement(Catalog, Cell, Graph.Connections.FindChecked(Cell), 0, GridOrigin, Seed, OutPlan, OutError))
+		if (!AddRoadPlacement(Catalog, Cell, Graph.Connections.FindChecked(Cell), 0, Grid, Seed, OutPlan, OutError))
 		{
 			return false;
 		}
@@ -649,12 +673,13 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 		FDeepLevelRoadTilePlacement& Placement = OutPlan.Placements.Emplace_GetRef();
 		Placement.TileMesh = Candidate.Definition->TileMesh;
 		Placement.TileMaterialOverride = Candidate.Definition->TileMaterialOverride;
-		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, GridOrigin, Catalog.GridCellSize, Candidate.QuarterTurns);
+		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, Grid.Origin, Grid.TileSize, Candidate.QuarterTurns);
+		Placement.SurfaceTransform = MakeSurfaceTransform(*Candidate.Definition, Placement.Transform);
 		Placement.GridCell = Cell;
 		Placement.Kind = EDeepLevelRoadTileKind::Sidewalk;
 	}
 	OutPlan.SidewalkCellCount = SidewalkPlacements.Num();
-	return ApplyCellOverrides(CellOverrides, GridOrigin, Catalog.GridCellSize, OutPlan, OutError);
+	return ApplyCellOverrides(CellOverrides, Grid.Origin, Grid.TileSize, OutPlan, OutError);
 }
 
 #undef LOCTEXT_NAMESPACE
