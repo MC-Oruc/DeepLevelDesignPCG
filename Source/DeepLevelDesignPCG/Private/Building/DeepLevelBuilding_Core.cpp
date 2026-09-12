@@ -451,7 +451,8 @@ FText UDeepLevelBuildingLinePCGSettings::GetDefaultNodeTitle() const
 TArray<FPCGPinProperties> UDeepLevelBuildingLinePCGSettings::InputPinProperties() const
 {
 	TArray<FPCGPinProperties> Pins;
-	Pins.Emplace(PCGPinConstants::DefaultInputLabel, EPCGDataType::Spline);
+	FPCGPinProperties& InputPin = Pins.Emplace_GetRef(PCGPinConstants::DefaultInputLabel, EPCGDataType::Any);
+	InputPin.PinStatus = EPCGPinStatus::Normal;
 	return Pins;
 }
 
@@ -505,14 +506,27 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		}
 		OutputData->InitializeFromData(Spline);
 	}
-	FPCGMetadataAttribute<FSoftClassPath>* ActorClassAttribute = OutputData->MutableMetadata()->CreateAttribute<FSoftClassPath>(
-		Settings->ActorClassAttribute, FSoftClassPath(), false, false);
+	else
+	{
+		OutputData->TargetActor = const_cast<ADeepLevelPCGBuildingLineActor*>(BuildingActor);
+		if (Inputs.Num() > 0 && Inputs[0].Data && Inputs[0].Data->IsA<UPCGSpatialData>())
+		{
+			OutputData->InitializeFromData(Cast<UPCGSpatialData>(Inputs[0].Data));
+			OutputData->TargetActor = const_cast<ADeepLevelPCGBuildingLineActor*>(BuildingActor);
+		}
+	}
+
+	const FName AttributeName = Settings->ActorClassAttribute.IsNone() ? TEXT("ActorClass") : Settings->ActorClassAttribute;
+	FPCGMetadataAttribute<FSoftClassPath>* ActorClassAttribute = OutputData->MutableMetadata()->FindOrCreateAttribute<FSoftClassPath>(
+		AttributeName, FSoftClassPath(), false, false);
 	if (!ActorClassAttribute)
 	{
 		DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("ActorClassAttributeFailure", "Could not create the ActorClass output attribute."), Context);
 		Context->OutputData.bCancelExecution = true;
 		return true;
 	}
+
+	const UDeepLevelBuildingPlacementCatalog* LoadedCatalog = BuildingActor->Catalog.LoadSynchronous();
 	TArray<FPCGPoint>& Points = OutputData->GetMutablePoints();
 	Points.Reserve(Layout->Plan.Placements.Num());
 	for (int32 Index = 0; Index < Layout->Plan.Placements.Num(); ++Index)
@@ -523,13 +537,34 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		Point.Density = 1.0f;
 		Point.Seed = HashCombineFast(BuildingActor->RandomSeed, Placement.FrontageId.IsValid()
 			? HashCombineFast(GetTypeHash(Placement.FrontageId), GetTypeHash(Placement.CoverageStart)) : Index);
+
+		const FDeepLevelBuildingPlacementDefinition* Def = LoadedCatalog
+			? LoadedCatalog->Buildings.FindByPredicate([&Placement](const FDeepLevelBuildingPlacementDefinition& Entry)
+			{
+				return Entry.BuildingClass == Placement.BuildingClass;
+			})
+			: nullptr;
+		const FVector Extent = Def ? Def->PlacementVolume.Extent : FVector(250.0, 100.0, 100.0);
+		Point.BoundsMin = -Extent;
+		Point.BoundsMax = Extent;
+
 		Point.MetadataEntry = OutputData->MutableMetadata()->AddEntry();
-		ActorClassAttribute->SetValue(Point.MetadataEntry, FSoftClassPath(Placement.BuildingClass.ToSoftObjectPath().ToString()));
+
+		UClass* LoadedClass = Placement.BuildingClass.Get();
+		if (!LoadedClass)
+		{
+			LoadedClass = Placement.BuildingClass.LoadSynchronous();
+		}
+		const FSoftClassPath ClassPath(LoadedClass ? LoadedClass : Placement.BuildingClass.Get());
+		ActorClassAttribute->SetValue(Point.MetadataEntry, ClassPath);
 	}
 	FPCGTaggedData& Output = Context->OutputData.TaggedData.Emplace_GetRef();
-	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline) { Output.Tags = Inputs[0].Tags; }
+	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline && Inputs.Num() > 0) { Output.Tags = Inputs[0].Tags; }
 	Output.Pin = PCGPinConstants::DefaultOutputLabel;
 	Output.Data = OutputData;
+
+	UE_LOG(LogPCG, Log, TEXT("DeepLevelBuildingLine: Emitted %d placement points for '%s' (PathSource=%d)."),
+		Points.Num(), *BuildingActor->GetName(), static_cast<int32>(BuildingActor->PathSource));
 
 	return true;
 }

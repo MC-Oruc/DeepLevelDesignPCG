@@ -278,9 +278,14 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 	{
 		if (const UPCGManagedActors* Managed = Cast<UPCGManagedActors>(Resource))
 		{
-			for (const TSoftObjectPtr<AActor>& Actor : Managed->GetConstGeneratedActors())
+			for (const TSoftObjectPtr<AActor>& ActorPtr : Managed->GetConstGeneratedActors())
 			{
-				if (IsValid(Actor.Get())) { Actors.Add(Actor.Get()); }
+				AActor* Actor = ActorPtr.Get();
+				if (!Actor)
+				{
+					Actor = ActorPtr.LoadSynchronous();
+				}
+				if (IsValid(Actor)) { Actors.Add(Actor); }
 			}
 		}
 	});
@@ -292,9 +297,14 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 	for (int32 Index = 0; Index < GeneratingLayout->Plan.Placements.Num() && bMatches; ++Index)
 	{
 		bMatches = false;
+		UClass* TargetClass = GeneratingLayout->Plan.Placements[Index].BuildingClass.Get();
+		if (!TargetClass)
+		{
+			TargetClass = GeneratingLayout->Plan.Placements[Index].BuildingClass.LoadSynchronous();
+		}
 		for (int32 ActorIndex = 0; ActorIndex < Actors.Num(); ++ActorIndex)
 		{
-			if (!Matched[ActorIndex] && Actors[ActorIndex]->GetClass() == GeneratingLayout->Plan.Placements[Index].BuildingClass.Get()
+			if (!Matched[ActorIndex] && TargetClass && Actors[ActorIndex]->GetClass() == TargetClass
 				&& Actors[ActorIndex]->GetActorTransform().Equals(GeneratingLayout->Transforms[Index], 0.01))
 			{
 				Matched[ActorIndex] = true; bMatches = true; break;
