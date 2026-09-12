@@ -207,6 +207,11 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 	const int32 InstanceComponentCount = CityLayout->GetInstanceComponents().Num();
 	TestTrue(TEXT("Regeneration replaces saved outputs without duplication"), CityLayout->DecorationComponent->Regenerate(true, Error));
 	TestEqual(TEXT("Regeneration preserves the generated component count"), CityLayout->GetInstanceComponents().Num(), InstanceComponentCount);
+	Spline->SetRoadPathFromWorldPoints({FVector(100.0, 200.0, 300.0), FVector(5100.0, 200.0, 300.0), FVector(5100.0, 5200.0, 300.0)});
+	FDeepLevelCityLayoutFragment Bend;
+	TestTrue(TEXT("Single-width L-shaped road fragment builds"), Network->BuildCityLayoutFragment(Grid, Bend, Error));
+	TestFalse(TEXT("Bends and end caps never turn a local road into an arterial"), Bend.Anchors.ContainsByPredicate(
+		[](const FDeepLevelCityAnchor& Edge) { return Edge.Tags.HasTagExact(DeepLevelCityTags::Anchor_Road_Arterial); }));
 	return true;
 }
 

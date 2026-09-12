@@ -80,6 +80,14 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityDecorationEntry
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "1", UIMin = "1"))
 	int32 AnchorInterval = 1;
 
+	/** Grid-cell phase shared by entries that should form a furniture group. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "0", UIMin = "0"))
+	int32 AnchorPhase = 0;
+
+	/** Offset the reverse-facing segment edge by half an even interval. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+	bool bStaggerOppositeEdges = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
 	FTransform LocalTransform = FTransform::Identity;
 };

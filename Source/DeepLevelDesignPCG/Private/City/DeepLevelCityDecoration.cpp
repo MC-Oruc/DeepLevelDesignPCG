@@ -204,6 +204,8 @@ bool UDeepLevelCityDecorationCategory::Validate(FText& OutError) const
 			|| !FMath::IsFinite(Entry.ClearanceRadius) || Entry.ClearanceRadius < 0.0
 			|| !FMath::IsFinite(Entry.RequiredAnchorClearanceDepth) || Entry.RequiredAnchorClearanceDepth < 0.0
 			|| Entry.AnchorInterval < 1
+			|| Entry.AnchorPhase < 0
+			|| (Entry.bStaggerOppositeEdges && (Entry.AnchorInterval < 2 || Entry.AnchorInterval % 2 != 0))
 			|| (Entry.Output == EDeepLevelCityDecorationOutput::Decal
 				&& (Entry.DecalSize.ContainsNaN() || Entry.DecalSize.GetMin() <= 0.0))
 			|| Entry.LocalTransform.ContainsNaN())
@@ -289,12 +291,16 @@ bool FDeepLevelCityDecorationResolver::Resolve(
 					if (Entry.AnchorInterval > 1 && !Anchor.OccupiedCells.IsEmpty())
 					{
 						const FVector Tangent = Anchor.Transform.GetUnitAxis(EAxis::X);
-						const int32 Coordinate = FMath::Abs(Tangent.X) >= FMath::Abs(Tangent.Y)
+						const bool bAlongX = FMath::Abs(Tangent.X) >= FMath::Abs(Tangent.Y);
+						const int32 Coordinate = bAlongX
 							? Anchor.OccupiedCells[0].X
 							: Anchor.OccupiedCells[0].Y;
-						const int32 Phase = static_cast<int32>(HashCombineFast(GetTypeHash(Seed), HashDecorationGuid(Entry.EntryGuid))
-							% static_cast<uint32>(Entry.AnchorInterval));
-						const int32 CadenceIndex = ((Coordinate - Phase) % Entry.AnchorInterval + Entry.AnchorInterval) % Entry.AnchorInterval;
+						const bool bReverseEdge = Anchor.Geometry == EDeepLevelCityAnchorGeometry::Segment
+							&& (bAlongX ? Tangent.X : Tangent.Y) < 0.0;
+						const int64 Phase = static_cast<int64>(Entry.AnchorPhase)
+							+ (Entry.bStaggerOppositeEdges && bReverseEdge ? Entry.AnchorInterval / 2 : 0);
+						const int64 CadenceIndex = ((static_cast<int64>(Coordinate) - Phase) % Entry.AnchorInterval
+							+ Entry.AnchorInterval) % Entry.AnchorInterval;
 						if (CadenceIndex != 0)
 						{
 							continue;

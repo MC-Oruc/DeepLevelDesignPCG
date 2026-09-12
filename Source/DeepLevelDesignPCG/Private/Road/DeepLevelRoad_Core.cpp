@@ -308,8 +308,17 @@ bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
 			}
 
 			int32 RoadWidthInCells = 0;
-			for (FIntPoint RoadCell = Placement.GridCell + Direction; RoadPlacements.Contains(RoadCell); RoadCell += Direction)
+			const int32 AlongEdgeMask = Direction.X != 0
+				? static_cast<int32>(EDeepLevelRoadConnection::PositiveY) | static_cast<int32>(EDeepLevelRoadConnection::NegativeY)
+				: static_cast<int32>(EDeepLevelRoadConnection::PositiveX) | static_cast<int32>(EDeepLevelRoadConnection::NegativeX);
+			for (FIntPoint RoadCell = Placement.GridCell + Direction; ; RoadCell += Direction)
 			{
+				const FDeepLevelRoadTilePlacement* const* CrossSection = RoadPlacements.Find(RoadCell);
+				// A bend or end cap points down the road, not across its width.
+				if (!CrossSection || ((*CrossSection)->ConnectionMask & AlongEdgeMask) != AlongEdgeMask)
+				{
+					break;
+				}
 				++RoadWidthInCells;
 			}
 			Edge.Tags.AddTag(RoadWidthInCells > 1

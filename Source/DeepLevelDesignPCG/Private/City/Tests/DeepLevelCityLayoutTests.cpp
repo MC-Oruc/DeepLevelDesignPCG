@@ -139,10 +139,12 @@ bool FDeepLevelCityDecorationResolverTest::RunTest(const FString& Parameters)
 	LowPriority.ClearanceRadius = 100.0;
 	LowPriority.MinimumSpacing = 600.0;
 	LowPriority.Priority = 1;
-	FDeepLevelCityDecorationEntry& HighPriority = Category->Entries.Emplace_GetRef(LowPriority);
+	FDeepLevelCityDecorationEntry LowPriorityCopy = LowPriority;
+	FDeepLevelCityDecorationEntry& HighPriority = Category->Entries.Emplace_GetRef(LowPriorityCopy);
 	HighPriority.EntryGuid = FGuid(10, 0, 0, 2);
 	HighPriority.Priority = 10;
-	FDeepLevelCityDecorationEntry& IndependentSlot = Category->Entries.Emplace_GetRef(LowPriority);
+	const FGuid HighPriorityGuid = HighPriority.EntryGuid;
+	FDeepLevelCityDecorationEntry& IndependentSlot = Category->Entries.Emplace_GetRef(LowPriorityCopy);
 	IndependentSlot.EntryGuid = FGuid(10, 0, 0, 3);
 	IndependentSlot.PlacementSlot = TEXT("Independent");
 	UDeepLevelCityDecorationSet* DecorationSet = NewObject<UDeepLevelCityDecorationSet>();
@@ -155,7 +157,7 @@ bool FDeepLevelCityDecorationResolverTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Physical clearance blocks overlapping solid outputs across placement slots"), First.Num(), 1);
 	if (First.Num() == 1)
 	{
-		TestEqual(TEXT("Higher priority entry claims the shared anchor slot"), First[0].EntryGuid, HighPriority.EntryGuid);
+		TestEqual(TEXT("Higher priority entry claims the shared anchor slot"), First[0].EntryGuid, HighPriorityGuid);
 		TestEqual(TEXT("Resolved placement remains on the free sidewalk cell"), First[0].Transform.GetLocation(), Grid.CellToWorld(FIntPoint::ZeroValue));
 		TestEqual(TEXT("Stable placement ID survives repeated resolution"), Second[0].StableId, First[0].StableId);
 
@@ -186,6 +188,78 @@ bool FDeepLevelCityDecorationResolverTest::RunTest(const FString& Parameters)
 			*Snapshot, *DecorationSet, 77, Added, Error, {Add}));
 		TestEqual(TEXT("Add override appends the explicitly selected catalog entry"), Added.Num(), 2);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepLevelCityStreetCadenceTest,
+	"DeepLevelDesignPCG.Editor.City.StreetCadence",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityStreetCadenceTest::RunTest(const FString& Parameters)
+{
+	FDeepLevelCityGrid Grid{FVector(500.0, 3000.0, 0.0), 500.0, 4};
+	UDeepLevelCityDecorationCategory* Category = NewObject<UDeepLevelCityDecorationCategory>();
+	FDeepLevelCityDecorationEntry& Lamp = Category->Entries.Emplace_GetRef();
+	Lamp.EntryGuid = FGuid(42, 1, 1, 1);
+	Lamp.Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	Lamp.AnchorInterval = 8;
+	Lamp.AnchorPhase = 1;
+	Lamp.bStaggerOppositeEdges = true;
+	Lamp.MinimumSpacing = 1000.0;
+	Lamp.ClearanceRadius = 50.0;
+	UDeepLevelCityDecorationSet* Set = NewObject<UDeepLevelCityDecorationSet>();
+	Set->Categories.Add(Category);
+	FText Error;
+	for (const bool bAlongX : {true, false})
+	{
+		FDeepLevelCityLayoutFragment Road;
+		Road.SourceGuid = FGuid(42, 2, 2, 2);
+		for (int32 Coordinate = -16; Coordinate < 16; ++Coordinate)
+		{
+			for (const int32 Side : {-1, 1})
+			{
+				const FIntPoint Cell = bAlongX ? FIntPoint(Coordinate, Side) : FIntPoint(Side, Coordinate);
+				Road.Cells.Add({Cell, static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
+				FDeepLevelCityAnchor& Anchor = Road.Anchors.Emplace_GetRef();
+				Anchor.StableId = FDeepLevelCityStableId::MakeAnchorId(Road.SourceGuid,
+					FString::Printf(TEXT("%d:%d"), Cell.X, Cell.Y), TEXT("Edge"));
+				Anchor.Geometry = EDeepLevelCityAnchorGeometry::Segment;
+				Anchor.OccupiedCells.Add(Cell);
+				Anchor.Transform = FTransform(FRotator(0.0, (bAlongX ? 0.0 : 90.0) + (Side < 0 ? 180.0 : 0.0), 0.0), Grid.CellToWorld(Cell));
+			}
+		}
+		TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
+		if (!TestTrue(TEXT("Street snapshot builds"), FDeepLevelCityLayoutBuilder::Build(Grid, {Road}, Snapshot, Error)))
+		{
+			return false;
+		}
+		TArray<FDeepLevelCityResolvedDecoration> First;
+		TestTrue(TEXT("Staggered street resolves"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, First, Error));
+		TestEqual(TEXT("Both curbs retain four lamps without opposite-side spacing holes"), First.Num(), 8);
+		for (const FDeepLevelCityResolvedDecoration& Placement : First)
+		{
+			const FIntPoint Cell = Grid.WorldToCell(Placement.Transform.GetLocation());
+			const int32 Coordinate = bAlongX ? Cell.X : Cell.Y;
+			const int32 Side = bAlongX ? Cell.Y : Cell.X;
+			TestEqual(TEXT("Opposite curb is offset by twenty meters, including negative cells"),
+				((Coordinate % 8) + 8) % 8, Side < 0 ? 5 : 1);
+		}
+		Lamp.EntryGuid = FGuid(42, 9, 9, 9);
+		TArray<FDeepLevelCityResolvedDecoration> Second;
+		TestTrue(TEXT("Different seed and asset identity preserve authored street rhythm"),
+			FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 1234, Second, Error));
+		TestEqual(TEXT("Same coverage after seed change"), Second.Num(), First.Num());
+		for (const FDeepLevelCityResolvedDecoration& Placement : First)
+		{
+			TestTrue(TEXT("No seed-driven lamp movement"), Second.ContainsByPredicate([&Placement](const auto& Other)
+			{
+				return Other.Transform.GetLocation().Equals(Placement.Transform.GetLocation());
+			}));
+		}
+	}
+	Lamp.AnchorInterval = 7;
+	TestFalse(TEXT("Uneven stagger cadence is rejected"), Category->Validate(Error));
 	return true;
 }
 
