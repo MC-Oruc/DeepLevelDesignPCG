@@ -251,6 +251,13 @@ void ADeepLevelPCGBuildingLineActor::GenerateBuildings()
 		return;
 	}
 	Modify();
+	if (PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges && BuildingLine && BuildingLine->GetNumberOfSplinePoints() < 2)
+	{
+		BuildingLine->ClearSplinePoints(false);
+		BuildingLine->AddSplinePoint(FVector(0.0, 0.0, 0.0), ESplineCoordinateSpace::Local, false);
+		BuildingLine->AddSplinePoint(FVector(100.0, 0.0, 0.0), ESplineCoordinateSpace::Local, false);
+		BuildingLine->UpdateSpline();
+	}
 	PCGComponent->GenerateLocal(true);
 #endif
 }
