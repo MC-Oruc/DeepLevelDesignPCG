@@ -396,6 +396,7 @@ void ADeepLevelRoadNetworkActor::NotifyRoadNetworkChanged(const EDeepLevelRoadNe
 	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents)
 	{
 		++LayoutRevision;
+		if (CityLayout) { CityLayout->NotifyBaseLayoutChanged(); }
 	}
 	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && PCGComponent)
 	{

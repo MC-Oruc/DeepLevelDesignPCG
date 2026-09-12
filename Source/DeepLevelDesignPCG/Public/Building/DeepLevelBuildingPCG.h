@@ -74,6 +74,7 @@ public:
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif
 };
 
@@ -220,10 +221,18 @@ public:
 class UPCGComponent;
 class UDeepLevelBuildingLineSplineComponent;
 struct FDeepLevelBuildingLinePlan;
+struct FDeepLevelBuildingPreparedLayout;
+
+UENUM(BlueprintType)
+enum class EDeepLevelBuildingPathSource : uint8
+{
+	AuthoredSpline,
+	RoadSidewalkEdges
+};
 
 /** Authoring actor for one open or closed building frontage. Buildings spawn on spline-right. */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
-class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor, public IDeepLevelCityLayoutProvider
+class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor, public IDeepLevelCityLayoutProvider, public IDeepLevelCityDerivedLayoutProvider
 {
 	GENERATED_BODY()
 
@@ -232,6 +241,27 @@ public:
 	virtual void PostLoad() override;
 	virtual void PostActorCreated() override;
 	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
+	virtual void PostRegisterAllComponents() override;
+	virtual void PostUnregisterAllComponents() override;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	EDeepLevelBuildingPathSource PathSource = EDeepLevelBuildingPathSource::AuthoredSpline;
+
+	/** Optional level actors whose XY bounds block Roadside Building placement. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line", meta = (EditCondition = "PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges", EditConditionHides))
+	TArray<TSoftObjectPtr<AActor>> RoadsideExclusionActors;
+
+	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Building Line")
+	void GenerateBuildings();
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	FText LastGenerationError;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	int32 RejectedPlacementCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
+	bool bOutputCurrent = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
 	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
@@ -253,7 +283,21 @@ public:
 		const FDeepLevelCityGrid& Grid,
 		FDeepLevelCityLayoutFragment& OutFragment,
 		FText& OutError) const override;
+	virtual bool BuildDerivedCityLayoutFragment(
+		const ADeepLevelCityLayoutActor& LayoutOwner,
+		const FDeepLevelCityGrid& Grid,
+		const FDeepLevelCityLayoutSnapshot& BaseSnapshot,
+		FDeepLevelCityLayoutFragment& OutFragment,
+		FText& OutError) const override;
 	void NotifyBuildingLayoutChanged();
+	virtual void InvalidateDerivedLayout() override;
+	TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedLayout() const { return GeneratingLayout; }
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditMove(bool bFinished) override;
+	virtual void PostEditUndo() override;
+#endif
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|PCG|Components")
 	TObjectPtr<UDeepLevelBuildingLineSplineComponent> BuildingLine;
@@ -264,6 +308,24 @@ public:
 private:
 	void EnsureLayoutSourceGuid();
 	bool BuildPlan(FDeepLevelBuildingLinePlan& OutPlan, FText& OutError) const;
+	bool PrepareLayout(FText& OutError) const;
+	void BuildFragment(const FDeepLevelBuildingLinePlan& Plan, FDeepLevelCityLayoutFragment& OutFragment) const;
+	uint32 GetInputKey(const FDeepLevelCityLayoutSnapshot* Base) const;
+	void OnGenerationStarted(UPCGComponent* Component);
+	void OnGenerationCompleted(UPCGComponent* Component);
+	void OnGenerationCancelled(UPCGComponent* Component);
+	void OnGenerationCleaned(UPCGComponent* Component);
+#if WITH_EDITOR
+	void OnInputPropertyChanged(UObject* Object, FPropertyChangedEvent& Event);
+#endif
+	mutable TSharedPtr<const FDeepLevelBuildingPreparedLayout> PreparedLayout;
+	TSharedPtr<const FDeepLevelBuildingPreparedLayout> GeneratingLayout;
+
+	UPROPERTY()
+	FDeepLevelCityLayoutFragment GeneratedFragment;
+
+	UPROPERTY()
+	uint32 GeneratedInputKey = 0;
 
 	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Building Line")
 	FGuid LayoutSourceGuid;
@@ -395,7 +457,8 @@ public:
 		double CornerPreference,
 		EDeepLevelCornerPlacementFlags CornerPlacement,
 		FDeepLevelBuildingLinePlan& OutPlan,
-		FText& OutError);
+		FText& OutError,
+		bool bAllowEmpty = false);
 };
 
 
@@ -520,6 +583,7 @@ namespace DeepLevelBuildingLinePCGDataInterop
 
 struct DEEPLEVELDESIGNPCG_API FDeepLevelBuildingLinePlacement
 {
+	FGuid FrontageId;
 	TSoftClassPtr<AActor> BuildingClass;
 	double Distance = 0.0;
 	double CoverageStart = 0.0;
@@ -548,7 +612,8 @@ public:
 		double CornerPreference,
 		EDeepLevelCornerPlacementFlags CornerPlacement,
 		FDeepLevelBuildingLinePlan& OutPlan,
-		FText& OutError);
+		FText& OutError,
+		bool bAllowEmpty = false);
 };
 
 

@@ -14,7 +14,8 @@ bool FDeepLevelBuildingLinePlanner::BuildPlan(
 	const double CornerPreference,
 	const EDeepLevelCornerPlacementFlags CornerPlacement,
 	FDeepLevelBuildingLinePlan& OutPlan,
-	FText& OutError)
+	FText& OutError,
+	const bool bAllowEmpty)
 {
 	return FDeepLevelBuildingLinePackingSolver::Solve(
 		Catalog,
@@ -24,7 +25,8 @@ bool FDeepLevelBuildingLinePlanner::BuildPlan(
 		CornerPreference,
 		CornerPlacement,
 		OutPlan,
-		OutError);
+		OutError,
+		bAllowEmpty);
 }
 
 // ---- DeepLevelBuildingLinePackingSolver ----
@@ -251,7 +253,8 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 	const double CornerPreference,
 	const EDeepLevelCornerPlacementFlags CornerPlacement,
 	FDeepLevelBuildingLinePlan& OutPlan,
-	FText& OutError)
+	FText& OutError,
+	const bool bAllowEmpty)
 {
 	using namespace DeepLevelBuildingLinePacking;
 	OutPlan = {};
@@ -373,7 +376,8 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 		&History,
 		&Shapes,
 		&ResolvedElements,
-		&OutError](const double SpanStart, const double SpanEnd, const int32 ZoneIndex, const bool bCloseLoop)
+		&OutError,
+		bAllowEmpty](const double SpanStart, const double SpanEnd, const int32 ZoneIndex, const bool bCloseLoop)
 	{
 		TArray<FResolvedElement> SpanElements;
 		FSelectionHistory SpanHistory;
@@ -394,6 +398,10 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 			SpanElements,
 			SpanHistory))
 		{
+			if (bAllowEmpty)
+			{
+				return true;
+			}
 			OutError = FText::Format(
 				LOCTEXT("SpanPackingFailure", "Building Line cannot safely pack route span {0}; check placement volumes near this section."),
 				FText::AsNumber(ZoneIndex + 1));
@@ -493,6 +501,7 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 	});
 	if (ResolvedElements.IsEmpty())
 	{
+		if (bAllowEmpty) { return true; }
 		OutError = LOCTEXT("NoBuildingFits", "No calibrated building fits within the Building Line spline.");
 		return false;
 	}

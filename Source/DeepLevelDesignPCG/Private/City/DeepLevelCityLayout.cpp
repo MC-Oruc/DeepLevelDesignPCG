@@ -80,28 +80,79 @@ bool ADeepLevelCityLayoutActor::ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& 
 	return OutGrid.Validate(OutError);
 }
 
-bool ADeepLevelCityLayoutActor::RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError)
+bool ADeepLevelCityLayoutActor::BuildBaseFragments(
+	TArray<FDeepLevelCityLayoutFragment>& Fragments, FDeepLevelCityGrid& Grid, FText& OutError) const
 {
-	OutDirtyChunks.Reset();
-	FDeepLevelCityGrid Grid;
+	Fragments.Reset();
 	if (!ResolveGrid(Grid, OutError))
 	{
 		return false;
 	}
-	TArray<FDeepLevelCityLayoutFragment> Fragments;
+	if (DerivedLayoutProviders.Num() > 1)
+	{
+		OutError = LOCTEXT("MultipleDerivedProviders", "City Layout supports one Roadside Building provider. Use Authored Spline for additional building lines.");
+		return false;
+	}
+	TSet<const AActor*> Providers;
+	for (const AActor* Actor : DerivedLayoutProviders)
+	{
+		if (!Cast<IDeepLevelCityDerivedLayoutProvider>(Actor) || LayoutProviders.Contains(Actor))
+		{
+			OutError = LOCTEXT("InvalidDerivedProvider", "Derived Layout Providers requires a derived provider registered only in this list.");
+			return false;
+		}
+	}
 	Fragments.Reserve(LayoutProviders.Num());
 	for (AActor* ProviderActor : LayoutProviders)
 	{
 		const IDeepLevelCityLayoutProvider* Provider = Cast<IDeepLevelCityLayoutProvider>(ProviderActor);
-		if (!Provider)
+		if (!Provider || Providers.Contains(ProviderActor))
 		{
 			OutError = LOCTEXT("InvalidLayoutProvider", "City Layout contains an actor that does not provide a city layout fragment.");
 			return false;
 		}
+		Providers.Add(ProviderActor);
 		FDeepLevelCityLayoutFragment& Fragment = Fragments.Emplace_GetRef();
 		if (!Provider->BuildCityLayoutFragment(Grid, Fragment, OutError))
 		{
 			return false;
+		}
+	}
+	return true;
+}
+
+bool ADeepLevelCityLayoutActor::BuildBaseSnapshot(
+	TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot, FText& OutError) const
+{
+	TArray<FDeepLevelCityLayoutFragment> Fragments;
+	FDeepLevelCityGrid Grid;
+	return BuildBaseFragments(Fragments, Grid, OutError)
+		&& FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, OutSnapshot, OutError);
+}
+
+bool ADeepLevelCityLayoutActor::RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError)
+{
+	OutDirtyChunks.Reset();
+	TArray<FDeepLevelCityLayoutFragment> Fragments;
+	FDeepLevelCityGrid Grid;
+	if (!BuildBaseFragments(Fragments, Grid, OutError))
+	{
+		return false;
+	}
+	if (!DerivedLayoutProviders.IsEmpty())
+	{
+		TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base;
+		if (!FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, Base, OutError))
+		{
+			return false;
+		}
+		for (const AActor* Actor : DerivedLayoutProviders)
+		{
+			FDeepLevelCityLayoutFragment& Fragment = Fragments.Emplace_GetRef();
+			if (!Cast<IDeepLevelCityDerivedLayoutProvider>(Actor)->BuildDerivedCityLayoutFragment(*this, Grid, *Base, Fragment, OutError))
+			{
+				return false;
+			}
 		}
 	}
 
@@ -118,6 +169,17 @@ bool ADeepLevelCityLayoutActor::RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks,
 void ADeepLevelCityLayoutActor::RegenerateDecoration()
 {
 	DecorationComponent->RegenerateInEditor();
+}
+
+void ADeepLevelCityLayoutActor::NotifyBaseLayoutChanged()
+{
+	for (AActor* Actor : DerivedLayoutProviders)
+	{
+		if (IDeepLevelCityDerivedLayoutProvider* Provider = Cast<IDeepLevelCityDerivedLayoutProvider>(Actor))
+		{
+			Provider->InvalidateDerivedLayout();
+		}
+	}
 }
 
 bool UDeepLevelCityGridProfile::Validate(FText& OutError) const
@@ -248,7 +310,7 @@ bool FDeepLevelCityLayoutBuilder::Build(
 				return false;
 			}
 			AnchorIds.Add(Anchor.StableId);
-			Snapshot->Anchors.Add(Anchor);
+			Snapshot->Anchors.Add_GetRef(Anchor).SourceGuid = Fragment.SourceGuid;
 		}
 	}
 

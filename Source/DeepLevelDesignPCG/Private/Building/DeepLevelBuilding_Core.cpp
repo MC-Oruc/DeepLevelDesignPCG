@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Building/DeepLevelBuildingPCG.h"
+#include "Building/DeepLevelBuildingLayout.h"
 #include "DeepLevelDesignPCGModule.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelBuildingPCG)
@@ -9,6 +10,8 @@
 
 
 #include "PCGComponent.h"
+#include "PCGGraph.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Data/PCGSplineData.h"
 
 namespace
@@ -23,6 +26,10 @@ namespace
 		});
 	}
 
+}
+
+namespace DeepLevelBuildingLayoutGeometry
+{
 	void MakeFootprintCorners(
 		const FDeepLevelBuildingPlacementVolume& Volume,
 		const FTransform& ActorTransform,
@@ -51,36 +58,30 @@ namespace
 		}
 	}
 
-	bool FootprintOverlapsCell(
-		const TStaticArray<FVector2D, 4>& Footprint,
-		const FVector2D& CellCenter,
-		const double HalfTile)
+	bool FootprintsOverlap(const FFootprint& A, const FFootprint& B)
 	{
-		TStaticArray<FVector2D, 4> Cell = {
-			CellCenter + FVector2D(-HalfTile, -HalfTile),
-			CellCenter + FVector2D( HalfTile, -HalfTile),
-			CellCenter + FVector2D( HalfTile,  HalfTile),
-			CellCenter + FVector2D(-HalfTile,  HalfTile)};
-		const FVector2D EdgeA = (Footprint[1] - Footprint[0]).GetSafeNormal();
-		const FVector2D EdgeB = (Footprint[3] - Footprint[0]).GetSafeNormal();
-		const FVector2D Axes[] = {
-			FVector2D::UnitX(), FVector2D::UnitY(),
-			FVector2D(-EdgeA.Y, EdgeA.X), FVector2D(-EdgeB.Y, EdgeB.X)};
-		for (const FVector2D& Axis : Axes)
+		for (const FFootprint* Polygon : {&A, &B})
 		{
-			double FootprintMin;
-			double FootprintMax;
-			double CellMin;
-			double CellMax;
-			ProjectPolygon(Footprint, Axis, FootprintMin, FootprintMax);
-			ProjectPolygon(Cell, Axis, CellMin, CellMax);
-			if (FootprintMax <= CellMin + UE_DOUBLE_KINDA_SMALL_NUMBER
-				|| CellMax <= FootprintMin + UE_DOUBLE_KINDA_SMALL_NUMBER)
+			for (int32 Edge = 0; Edge < 2; ++Edge)
 			{
-				return false;
+				const FVector2D Direction = ((*Polygon)[Edge + 1] - (*Polygon)[Edge]).GetSafeNormal();
+				const FVector2D Axis(-Direction.Y, Direction.X);
+				double AMin, AMax, BMin, BMax;
+				ProjectPolygon(A, Axis, AMin, AMax);
+				ProjectPolygon(B, Axis, BMin, BMax);
+				if (AMax <= BMin + UE_DOUBLE_KINDA_SMALL_NUMBER || BMax <= AMin + UE_DOUBLE_KINDA_SMALL_NUMBER)
+				{
+					return false;
+				}
 			}
 		}
 		return true;
+	}
+
+	bool FootprintOverlapsCell(const FFootprint& Footprint, const FVector2D& C, const double H)
+	{
+		const FFootprint Cell = {C + FVector2D(-H,-H), C + FVector2D(H,-H), C + FVector2D(H,H), C + FVector2D(-H,H)};
+		return FootprintsOverlap(Footprint, Cell);
 	}
 
 	void RasterizeFootprint(
@@ -111,6 +112,10 @@ namespace
 		}
 	}
 
+}
+
+namespace
+{
 	FTransform MakeAnchorTransform(const FVector& Location, const FVector& Tangent, const FVector& Normal)
 	{
 		return FTransform(FRotationMatrix::MakeFromXZ(Tangent.GetSafeNormal(), Normal.GetSafeNormal()).ToQuat(), Location);
@@ -126,6 +131,16 @@ ADeepLevelPCGBuildingLineActor::ADeepLevelPCGBuildingLineActor()
 	BuildingLine->SetClosedLoop(false);
 
 	PCGComponent = CreateDefaultSubobject<UPCGComponent>(TEXT("PCGComponent"));
+	PCGComponent->GenerationTrigger = EPCGComponentGenerationTrigger::GenerateOnDemand;
+#if WITH_EDITORONLY_DATA
+	PCGComponent->bRegenerateInEditor = false;
+#endif
+	static ConstructorHelpers::FObjectFinderOptional<UPCGGraphInterface> DefaultGraph(
+		TEXT("/DeepLevelDesignPCG/Building/PCG_DeepLevelBuildingLine.PCG_DeepLevelBuildingLine"));
+	if (DefaultGraph.Succeeded())
+	{
+		PCGComponent->GetGraphInstance()->SetGraph(DefaultGraph.Get());
+	}
 }
 
 void ADeepLevelPCGBuildingLineActor::PostLoad()
@@ -145,6 +160,10 @@ void ADeepLevelPCGBuildingLineActor::PostDuplicate(const EDuplicateMode::Type Du
 	Super::PostDuplicate(DuplicateMode);
 	LayoutSourceGuid = FGuid::NewGuid();
 	LayoutRevision = 0;
+	PreparedLayout.Reset();
+	GeneratingLayout.Reset();
+	bOutputCurrent = false;
+	GeneratedFragment = {};
 }
 
 void ADeepLevelPCGBuildingLineActor::EnsureLayoutSourceGuid()
@@ -208,6 +227,11 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 	FText& OutError) const
 {
 	OutFragment = {};
+	if (PathSource != EDeepLevelBuildingPathSource::AuthoredSpline)
+	{
+		OutError = NSLOCTEXT("DeepLevelBuildingLine", "WrongBaseMode", "Roadside Building must be registered in Derived Layout Providers, not Layout Providers.");
+		return false;
+	}
 	FDeepLevelCityGrid OwnedGrid;
 	if (!ResolveCityGrid(OwnedGrid, OutError))
 	{
@@ -222,11 +246,22 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 		return false;
 	}
 
-	FDeepLevelBuildingLinePlan Plan;
-	if (!BuildPlan(Plan, OutError))
+	if (!PrepareLayout(OutError))
 	{
 		return false;
 	}
+	OutFragment = PreparedLayout->Fragment;
+	return true;
+}
+
+void ADeepLevelPCGBuildingLineActor::BuildFragment(
+	const FDeepLevelBuildingLinePlan& Plan, FDeepLevelCityLayoutFragment& OutFragment) const
+{
+	OutFragment = {};
+	FDeepLevelCityGrid Grid;
+	FText Error;
+	const bool bValidGrid = ResolveCityGrid(Grid, Error);
+	check(bValidGrid);
 	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
 	OutFragment.SourceGuid = LayoutSourceGuid;
 	OutFragment.SourceRevision = LayoutRevision;
@@ -245,19 +280,23 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 			Definition->PlacementVolume.Rotation,
 			Definition->PlacementVolume.Center) * ActorTransform;
 		TStaticArray<FVector2D, 4> Footprint;
-		MakeFootprintCorners(Definition->PlacementVolume, ActorTransform, Footprint);
+		DeepLevelBuildingLayoutGeometry::MakeFootprintCorners(Definition->PlacementVolume, ActorTransform, Footprint);
 		TArray<FIntPoint> PlacementCells;
-		RasterizeFootprint(Grid, Footprint, PlacementCells);
+		DeepLevelBuildingLayoutGeometry::RasterizeFootprint(Grid, Footprint, PlacementCells);
 		for (const FIntPoint& Cell : PlacementCells)
 		{
 			OccupiedCells.Add(Cell);
 		}
 
-		const FString PlacementKey = FString::Printf(
+		FString PlacementKey = FString::Printf(
 			TEXT("Building:%lld:%lld:%s"),
 			FMath::RoundToInt64(Placement.CoverageStart * 100.0),
 			FMath::RoundToInt64(Placement.CoverageEnd * 100.0),
 			*Placement.BuildingClass.ToSoftObjectPath().ToString());
+		if (Placement.FrontageId.IsValid())
+		{
+			PlacementKey = Placement.FrontageId.ToString(EGuidFormats::Digits) + TEXT(":") + PlacementKey;
+		}
 		const FVector LocalNormals[] = {
 			FVector::ForwardVector, -FVector::ForwardVector, FVector::RightVector, -FVector::RightVector};
 		const FName FacadeSlots[] = {TEXT("FacadePX"), TEXT("FacadeNX"), TEXT("FacadePY"), TEXT("FacadeNY")};
@@ -316,15 +355,20 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 		Cell.OccupancyMask = static_cast<int32>(EDeepLevelCityOccupancy::Building);
 		Cell.Tags.AddTag(DeepLevelCityTags::Cell_Building);
 	}
-	return true;
 }
 
 void ADeepLevelPCGBuildingLineActor::NotifyBuildingLayoutChanged()
 {
 	++LayoutRevision;
+	PreparedLayout.Reset();
+	bOutputCurrent = false;
 	if (PCGComponent)
 	{
 		PCGComponent->NotifyPropertiesChangedFromBlueprint();
+	}
+	if (PathSource == EDeepLevelBuildingPathSource::AuthoredSpline && CityLayout)
+	{
+		CityLayout->NotifyBaseLayoutChanged();
 	}
 }
 
@@ -332,15 +376,20 @@ void ADeepLevelPCGBuildingLineActor::NotifyBuildingLayoutChanged()
 
 
 #if WITH_EDITOR
+bool UDeepLevelBuildingLineSplineComponent::CanEditChange(const FProperty* InProperty) const
+{
+	const auto* Owner = Cast<ADeepLevelPCGBuildingLineActor>(GetOwner());
+	if (Owner && Owner->PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges
+		&& InProperty && InProperty->GetFName() != GET_MEMBER_NAME_CHECKED(UDeepLevelBuildingLineSplineComponent, CornerPlacementMask))
+	{
+		return false;
+	}
+	return Super::CanEditChange(InProperty);
+}
+
 void UDeepLevelBuildingLineSplineComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	if (PropertyChangedEvent.GetPropertyName()
-		!= GET_MEMBER_NAME_CHECKED(UDeepLevelBuildingLineSplineComponent, CornerPlacementMask))
-	{
-		return;
-	}
 
 	if (ADeepLevelPCGBuildingLineActor* Owner = Cast<ADeepLevelPCGBuildingLineActor>(GetOwner()))
 	{
@@ -380,16 +429,6 @@ namespace DeepLevelBuildingLinePCG
 #endif
 	}
 
-	const FDeepLevelBuildingPlacementDefinition* FindDefinition(
-		const UDeepLevelBuildingPlacementCatalog& Catalog,
-		const TSoftClassPtr<AActor>& BuildingClass)
-	{
-		return Catalog.Buildings.FindByPredicate([&BuildingClass](const FDeepLevelBuildingPlacementDefinition& Definition)
-		{
-			return Definition.BuildingClass.ToSoftObjectPath() == BuildingClass.ToSoftObjectPath();
-		});
-	}
-
 }
 
 #if WITH_EDITOR
@@ -403,17 +442,16 @@ FText UDeepLevelBuildingLinePCGSettings::GetDefaultNodeTitle() const
 	return LOCTEXT("NodeTitle", "DeepLevel Building Line");
 }
 
-FText UDeepLevelBuildingLinePCGSettings::GetNodeTooltipText() const
+	FText UDeepLevelBuildingLinePCGSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("NodeTooltip", "Packs catalog-defined Packed Level Actors along an open or closed spline. Buildings are placed on spline-right.");
+	return LOCTEXT("NodeTooltip", "Emits the owning Building actor's accepted placement plan. Authored Spline input supplies metadata; RoadSidewalkEdges uses City Layout data.");
 }
 #endif
 
 TArray<FPCGPinProperties> UDeepLevelBuildingLinePCGSettings::InputPinProperties() const
 {
 	TArray<FPCGPinProperties> Pins;
-	FPCGPinProperties& Input = Pins.Emplace_GetRef(PCGPinConstants::DefaultInputLabel, EPCGDataType::Spline);
-	Input.SetRequiredPin();
+	Pins.Emplace(PCGPinConstants::DefaultInputLabel, EPCGDataType::Spline);
 	return Pins;
 }
 
@@ -444,104 +482,54 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 			LOCTEXT("InvalidOwner", "DeepLevel Building Line node must run on a DeepLevel Building Line actor."), Context);
 		return true;
 	}
-	FDeepLevelCityGrid Grid;
-	FText ValidationError;
-	if (!BuildingActor->ResolveCityGrid(Grid, ValidationError))
+	const TSharedPtr<const FDeepLevelBuildingPreparedLayout> Layout = BuildingActor->GetPreparedLayout();
+	if (!Layout || !BuildingActor->LastGenerationError.IsEmpty())
 	{
-		DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
+		DeepLevelBuildingLinePCG::ReportGenerationError(
+			BuildingActor->LastGenerationError.IsEmpty()
+				? LOCTEXT("UnpreparedBuilding", "Use Generate Buildings on the Building actor to prepare a valid placement plan.")
+				: BuildingActor->LastGenerationError, Context);
+		Context->OutputData.bCancelExecution = true;
 		return true;
 	}
-
-	UDeepLevelBuildingPlacementCatalog* Catalog = BuildingActor->Catalog.LoadSynchronous();
-	if (!Catalog)
-	{
-		DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("MissingCatalog", "DeepLevel Building Line has no valid catalog."), Context);
-		return true;
-	}
-
-	if (!Catalog->ValidateForGeneration(ValidationError))
-	{
-		DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
-		return true;
-	}
-
+	UPCGPointData* OutputData = FPCGContext::NewObject_AnyThread<UPCGPointData>(Context);
 	const TArray<FPCGTaggedData> Inputs = Context->InputData.GetInputsByPin(PCGPinConstants::DefaultInputLabel);
-	for (const FPCGTaggedData& Input : Inputs)
+	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline)
 	{
-		const UPCGSplineData* Spline = Cast<const UPCGSplineData>(Input.Data);
+		const UPCGSplineData* Spline = Inputs.Num() == 1 ? Cast<UPCGSplineData>(Inputs[0].Data) : nullptr;
 		if (!Spline)
 		{
-			DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("InvalidSplineInput", "DeepLevel Building Line input is not spline data."), Context);
-			continue;
+			DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("AuthoredSplineInput", "Authored Spline mode requires the owning Building Line's single spline input."), Context);
+			Context->OutputData.bCancelExecution = true;
+			return true;
 		}
-
-		FDeepLevelBuildingLinePath Path;
-		if (!FDeepLevelBuildingLinePath::Build(*Spline, Path, ValidationError))
-		{
-			DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
-			continue;
-		}
-		EDeepLevelCornerPlacementFlags CornerPlacement;
-		if (!FDeepLevelBuildingLineCornerPolicy::Resolve(
-			*Spline,
-			BuildingActor->BuildingLine->CornerPlacementMask,
-			CornerPlacement,
-			ValidationError))
-		{
-			DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
-			continue;
-		}
-
-		FDeepLevelBuildingLinePlan Plan;
-		if (!FDeepLevelBuildingLinePlanner::BuildPlan(
-			*Catalog,
-			Path,
-			BuildingActor->RandomSeed,
-			BuildingActor->VarietyStrength,
-			BuildingActor->CornerPreference,
-			CornerPlacement,
-			Plan,
-			ValidationError))
-		{
-			DeepLevelBuildingLinePCG::ReportGenerationError(ValidationError, Context);
-			continue;
-		}
-
-		UPCGPointData* OutputData = FPCGContext::NewObject_AnyThread<UPCGPointData>(Context);
 		OutputData->InitializeFromData(Spline);
-		FPCGMetadataAttribute<FSoftClassPath>* ActorClassAttribute = OutputData->MutableMetadata()->CreateAttribute<FSoftClassPath>(
-			Settings->ActorClassAttribute,
-			FSoftClassPath(),
-			false,
-			false);
-		if (!ActorClassAttribute)
-		{
-			DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("ActorClassAttributeFailure", "Could not create the ActorClass output attribute."), Context);
-			continue;
-		}
-
-		TArray<FPCGPoint>& Points = OutputData->GetMutablePoints();
-		Points.Reserve(Plan.Placements.Num());
-		for (const FDeepLevelBuildingLinePlacement& PlannedPlacement : Plan.Placements)
-		{
-			const FDeepLevelBuildingPlacementDefinition* Definition = DeepLevelBuildingLinePCG::FindDefinition(*Catalog, PlannedPlacement.BuildingClass);
-			check(Definition);
-
-			FPCGPoint& Point = Points.Emplace_GetRef();
-			Point.Transform = FDeepLevelBuildingPlacementGeometry::BuildActorTransform(
-				*Definition,
-				PlannedPlacement.StreetFace,
-				PlannedPlacement.PathSample.Location,
-				PlannedPlacement.PathSample.Forward,
-				PlannedPlacement.PathSample.Right);
-			Point.Density = 1.0f;
-			Point.Seed = HashCombineFast(BuildingActor->RandomSeed, Points.Num() - 1);
-			Point.MetadataEntry = OutputData->MutableMetadata()->AddEntry();
-			ActorClassAttribute->SetValue(Point.MetadataEntry, FSoftClassPath(PlannedPlacement.BuildingClass.ToSoftObjectPath().ToString()));
-		}
-
-		Context->OutputData.TaggedData.Emplace_GetRef(Input).Data = OutputData;
 	}
+	FPCGMetadataAttribute<FSoftClassPath>* ActorClassAttribute = OutputData->MutableMetadata()->CreateAttribute<FSoftClassPath>(
+		Settings->ActorClassAttribute, FSoftClassPath(), false, false);
+	if (!ActorClassAttribute)
+	{
+		DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("ActorClassAttributeFailure", "Could not create the ActorClass output attribute."), Context);
+		Context->OutputData.bCancelExecution = true;
+		return true;
+	}
+	TArray<FPCGPoint>& Points = OutputData->GetMutablePoints();
+	Points.Reserve(Layout->Plan.Placements.Num());
+	for (int32 Index = 0; Index < Layout->Plan.Placements.Num(); ++Index)
+	{
+		const FDeepLevelBuildingLinePlacement& Placement = Layout->Plan.Placements[Index];
+		FPCGPoint& Point = Points.Emplace_GetRef();
+		Point.Transform = Layout->Transforms[Index];
+		Point.Density = 1.0f;
+		Point.Seed = HashCombineFast(BuildingActor->RandomSeed, Placement.FrontageId.IsValid()
+			? HashCombineFast(GetTypeHash(Placement.FrontageId), GetTypeHash(Placement.CoverageStart)) : Index);
+		Point.MetadataEntry = OutputData->MutableMetadata()->AddEntry();
+		ActorClassAttribute->SetValue(Point.MetadataEntry, FSoftClassPath(Placement.BuildingClass.ToSoftObjectPath().ToString()));
+	}
+	FPCGTaggedData& Output = Context->OutputData.TaggedData.Emplace_GetRef();
+	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline) { Output.Tags = Inputs[0].Tags; }
+	Output.Pin = PCGPinConstants::DefaultOutputLabel;
+	Output.Data = OutputData;
 
 	return true;
 }

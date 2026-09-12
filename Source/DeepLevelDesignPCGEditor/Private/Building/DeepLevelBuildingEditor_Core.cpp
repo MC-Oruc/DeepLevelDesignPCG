@@ -382,6 +382,7 @@ void FDeepLevelBuildingCatalogEditorToolkit::ModifyCatalog(const FText& Text, TF
 	FScopedTransaction Transaction(Text);
 	Catalog->Modify();
 	Mutation();
+	Catalog->PostEditChange();
 	Catalog->MarkPackageDirty();
 	RefreshValidation();
 }

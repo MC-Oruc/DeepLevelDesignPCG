@@ -90,7 +90,9 @@ public:
 	ADeepLevelCityLayoutActor();
 
 	bool ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
+	bool BuildBaseSnapshot(TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot, FText& OutError) const;
 	bool RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError);
+	void NotifyBaseLayoutChanged();
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> GetSnapshot() const { return Snapshot; }
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|City Decoration")
@@ -104,6 +106,9 @@ public:
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|City Layout")
 	TArray<TObjectPtr<AActor>> LayoutProviders;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|City Layout")
+	TArray<TObjectPtr<AActor>> DerivedLayoutProviders;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Decoration")
 	TObjectPtr<UDeepLevelCityDecorationSet> DecorationSet;
@@ -121,6 +126,7 @@ public:
 	TObjectPtr<UDeepLevelCityDecorationComponent> DecorationComponent;
 
 private:
+	bool BuildBaseFragments(TArray<struct FDeepLevelCityLayoutFragment>& OutFragments, FDeepLevelCityGrid& OutGrid, FText& OutError) const;
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
 };
 
@@ -181,6 +187,10 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityAnchor
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
 	FGuid StableId;
+
+	/** Filled by the layout builder from the owning fragment. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
+	FGuid SourceGuid;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Geometry")
 	EDeepLevelCityAnchorGeometry Geometry = EDeepLevelCityAnchorGeometry::Point;
@@ -272,6 +282,26 @@ class DEEPLEVELDESIGNPCG_API IDeepLevelCityLayoutProvider
 public:
 	virtual bool BuildCityLayoutFragment(
 		const FDeepLevelCityGrid& Grid,
+		FDeepLevelCityLayoutFragment& OutFragment,
+		FText& OutError) const = 0;
+};
+
+UINTERFACE(MinimalAPI, meta = (CannotImplementInterfaceInBlueprint))
+class UDeepLevelCityDerivedLayoutProvider : public UInterface
+{
+	GENERATED_BODY()
+};
+
+class DEEPLEVELDESIGNPCG_API IDeepLevelCityDerivedLayoutProvider
+{
+	GENERATED_BODY()
+
+public:
+	virtual void InvalidateDerivedLayout() = 0;
+	virtual bool BuildDerivedCityLayoutFragment(
+		const ADeepLevelCityLayoutActor& LayoutOwner,
+		const FDeepLevelCityGrid& Grid,
+		const FDeepLevelCityLayoutSnapshot& BaseSnapshot,
 		FDeepLevelCityLayoutFragment& OutFragment,
 		FText& OutError) const = 0;
 };

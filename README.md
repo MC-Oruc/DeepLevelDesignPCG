@@ -29,15 +29,34 @@ The shipped graphs intentionally have no catalog assigned.
 2. Set the city origin, ground height, and grid extent on that actor.
 3. Create a `Deep Level Building Placement Catalog` Data Asset and add calibrated Packed Level Actors.
 4. Create a `Deep Level Road Tile Catalog` Data Asset and calibrate the road and sidewalk tile set. Assign the same City Grid Profile used by the City Layout.
-5. Place Road Network and Building Line actors, assign their City Layout, then author their geometry and catalogs.
+5. Place Road Network and Building Line actors, assign their City Layout and catalogs. Select the Building path source below, then use **Generate Buildings**.
 6. Create focused Decoration Category assets, compose them in one Decoration Set, and assign that set to the City Layout.
 7. Use `Regenerate City Decoration` on the City Layout. Normal regeneration rebuilds dirty chunks; force regeneration rebuilds every output chunk.
 
 Catalogs and populated Decoration assets are project data. They contain mesh/class references, placement volumes, matching rules, connectivity, weights, and calibration state; they are not copied into the plugin.
 
+## Building Path Sources
+
+The same Building Line actor, calibrated catalog, packing solver, seed, variety, and corner settings support both modes:
+
+| Path Source | City Layout registration | Placement source |
+| --- | --- | --- |
+| `AuthoredSpline` (default) | `LayoutProviders` | The actor's existing open or closed spline; no Road required |
+| `RoadSidewalkEdges` | `DerivedLayoutProviders` | Road/sidewalk semantics from the base City Layout snapshot |
+
+Keep Road Network actors in `LayoutProviders`. One Roadside Building actor per City Layout consumes all suitable Road edges; additional authored Building actors remain in the base list and block roadside placements through their occupancy. Duplicate registrations, wrong modes/lists, missing edges, and incompatible grids fail explicitly. Changing modes requires moving the provider registration to the corresponding list. Existing authored registrations and catalogs remain valid.
+
+Roadside placement follows the **block-side outer sidewalk boundary**, not the curb decoration anchor. Compatible edges join into paths; gaps, width changes, ambiguous turns, and junction approaches split them. The existing solver packs each path. Road, sidewalk, existing Building occupancy, junction clearance, city bounds, and accepted roadside footprints reject conflicting candidates. Rejected candidates leave gaps without random retries or repacking. No fitting buildings is valid empty output; missing Road semantics is an error.
+
+Use **Generate Buildings** on the actor for validation before PCG starts. The Building node emits the accepted actor-owned plan; its optional spline pin preserves authored spline metadata. The existing graph's Spawn Actor node must consume `ActorClass` and spawn each whole PLA without merging. Keep **Is Partitioned** disabled. Generation uses PCG managed resources and runs only in the editor, on demand, at whole-Building-actor scope. It does not regenerate Road meshes or introduce per-frontage actors.
+
+Road, base occupancy, grid, catalog/calibration, mode, spline, and placement settings invalidate the result. `Output Current`, `Last Generation Error`, and `Rejected Placement Count` expose its status. After successful PLA generation, the saved fragment publishes occupancy and facade/corner anchors, and configured Decoration updates from the final snapshot. Stale or failed roadside output blocks snapshot publication and Decoration regeneration. Prevalidation errors preserve existing output; failures after PCG starts have no automatic actor rollback. Correct the error and generate again, or explicitly clean up.
+
+Save the level after generation. Saved PLA output loads without a runtime rebuild. Chunk-based Decoration updates remain separate from Building generation; partial chunk/frontage PLA regeneration is not implemented. Manual PLAs outside the provider system are not occupancy inputs and must be handled separately before using the same area for Roadside Building. This feature does not migrate an existing map or remove manual actors.
+
 ## City Layout and Decoration
 
-The City Layout is the composition root. It owns the shared translated grid, generation bounds, provider list, decoration seed, Decoration Set, persistent overrides, immutable merged snapshot, and materialized output chunks. Road and Building remain authoritative for their own geometry and only publish immutable semantic fragments.
+The City Layout is the composition root. It owns the shared translated grid, generation bounds, base/derived provider lists, decoration seed, Decoration Set, persistent overrides, immutable merged snapshot, and materialized output chunks. Base providers build first; Roadside Building consumes that snapshot and publishes its successfully generated fragment before final composition. Road and Building remain authoritative for their own geometry. Road never accesses Building classes or catalogs.
 
 Decoration Categories are reusable rule groups. Each entry filters semantic anchor tags, required or blocked occupancy, probability, deterministic anchor interval, spacing, and clearance, then emits a Static Mesh, Actor, or Decal. `AnchorPhase` explicitly selects the grid-cell phase; it is independent of the seed and entry identity. Matching interval/phase with local offsets forms furniture groups. `bStaggerOppositeEdges` offsets reverse-facing segment anchors by half an even interval. Keep minimum spacing below the intended opposite-curb distance so it does not erase the authored rhythm. A Decoration Set composes categories and defines deterministic priority. Stable placement IDs derive from the source, anchor, slot, and entry identity, so `Remove`, `Modify`, and `Add` overrides survive regeneration. Solid Mesh and Actor outputs also respect physical clearance across placement slots; decals do not block solid props.
 
