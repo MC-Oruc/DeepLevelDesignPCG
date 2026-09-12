@@ -380,6 +380,7 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 		}
 
 		ISMComponent->SetCollisionProfileName(RoadMeshCollisionProfile.Name);
+		ISMComponent->SetCastShadow(false);
 
 		if (ISMComponent->GetAttachParent() != GeneratedRoadMeshes)
 		{
