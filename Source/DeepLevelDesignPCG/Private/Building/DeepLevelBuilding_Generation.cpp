@@ -14,22 +14,31 @@
 #define LOCTEXT_NAMESPACE "DeepLevelBuildingGeneration"
 DEFINE_LOG_CATEGORY_STATIC(LogDeepLevelBuildingGeneration, Log, All);
 
-uint32 ADeepLevelPCGBuildingLineActor::GetInputKey(const FDeepLevelCityLayoutSnapshot* Base) const
+namespace
+{
+	void BroadcastBuildingFailure(const FText& Error)
+	{
+#if WITH_EDITOR
+		FDeepLevelDesignPCGEditorEvents::OnGenerationFailed().Broadcast(
+			LOCTEXT("BuildingLineSystem", "Building Line"), Error);
+#endif
+	}
+}
+
+uint32 ADeepLevelPCGBuildingLineActor::GetInputKey() const
 {
 	// Identifies the complete placement input across editor reloads.
 	FBufferArchive Bytes;
 	FObjectAndNameAsStringProxyArchive Ar(Bytes, false);
-	uint8 Mode = static_cast<uint8>(PathSource);
-	uint32 RoadsidePlannerVersion = PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges ? 4U : 0U;
 	int32 Seed = RandomSeed, CornerMask = BuildingLine->CornerPlacementMask;
 	double Variety = VarietyStrength, Preference = CornerPreference;
 	FGuid Source = LayoutSourceGuid;
-	Ar << Mode << RoadsidePlannerVersion << Seed << CornerMask << Variety << Preference << Source;
+	Ar << Seed << CornerMask << Variety << Preference << Source;
 	FDeepLevelCityGrid Grid;
 	FText Error;
 	if (ResolveCityGrid(Grid, Error))
 	{
-		Ar << Grid.Origin << Grid.TileSize << Grid.ChunkSizeInCells << Grid.ExtentInCells;
+		Ar << Grid.Origin << Grid.TileSize << Grid.ChunkSizeInCells;
 	}
 	FString CatalogPath = Catalog.ToSoftObjectPath().ToString();
 	Ar << CatalogPath;
@@ -48,41 +57,11 @@ uint32 ADeepLevelPCGBuildingLineActor::GetInputKey(const FDeepLevelCityLayoutSna
 			FDeepLevelBuildingSequencePreset::StaticStruct()->SerializeItem(Ar, &Copy, nullptr);
 		}
 	}
-	if (PathSource == EDeepLevelBuildingPathSource::AuthoredSpline)
-	{
-		FTransform Transform = BuildingLine->GetComponentTransform();
-		bool bClosed = BuildingLine->IsClosedLoop();
-		Ar << Transform << bClosed;
-		FSplineCurves Curves = BuildingLine->SplineCurves;
-		Ar << Curves.Position << Curves.Rotation << Curves.Scale << Curves.ReparamTable;
-	}
-	if (Base)
-	{
-		TArray<FIntPoint> Cells;
-		Base->GetCells().GetKeys(Cells);
-		Cells.Sort([](const FIntPoint& A, const FIntPoint& B) { return A.X == B.X ? A.Y < B.Y : A.X < B.X; });
-		int32 Count = Cells.Num(); Ar << Count;
-		for (const FIntPoint& Cell : Cells)
-		{
-			auto Copy = *Base->FindCell(Cell);
-			FDeepLevelCityCellState::StaticStruct()->SerializeItem(Ar, &Copy, nullptr);
-		}
-		Count = Base->GetAnchors().Num(); Ar << Count;
-		for (const auto& Anchor : Base->GetAnchors())
-		{
-			auto Copy = Anchor;
-			FDeepLevelCityAnchor::StaticStruct()->SerializeItem(Ar, &Copy, nullptr);
-		}
-		Count = RoadsideExclusionActors.Num(); Ar << Count;
-		for (const TSoftObjectPtr<AActor>& ActorReference : RoadsideExclusionActors)
-		{
-			const AActor* Actor = ActorReference.Get();
-			FString Path = ActorReference.ToSoftObjectPath().ToString();
-			FVector Origin = FVector::ZeroVector, Extent = FVector::ZeroVector;
-			if (Actor) { Actor->GetActorBounds(false, Origin, Extent); }
-			Ar << Path << Origin << Extent;
-		}
-	}
+	FTransform Transform = BuildingLine->GetComponentTransform();
+	bool bClosed = BuildingLine->IsClosedLoop();
+	Ar << Transform << bClosed;
+	FSplineCurves Curves = BuildingLine->SplineCurves;
+	Ar << Curves.Position << Curves.Rotation << Curves.Scale << Curves.ReparamTable;
 	return FCrc::MemCrc32(Bytes.GetData(), Bytes.Num());
 }
 
@@ -102,57 +81,11 @@ bool ADeepLevelPCGBuildingLineActor::PrepareLayout(FText& OutError) const
 		if (!Data) { OutError = LOCTEXT("MissingCatalog", "Building Line requires a calibrated Building Placement Catalog."); }
 		return false;
 	}
-	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base;
-	if (PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges)
-	{
-		if (CityLayout->DerivedLayoutProviders.Num() != 1 || CityLayout->DerivedLayoutProviders[0] != this
-			|| CityLayout->LayoutProviders.Contains(this))
-		{
-			OutError = LOCTEXT("RoadsideRegistration", "Register this Roadside Building once in its City Layout's Derived Layout Providers, and remove it from Layout Providers.");
-			return false;
-		}
-		if (!CityLayout->BuildBaseSnapshot(Base, OutError)) { return false; }
-	}
-	else if (CityLayout->DerivedLayoutProviders.Contains(this))
-	{
-		OutError = LOCTEXT("AuthoredRegistration", "Authored Spline Building belongs in Layout Providers, not Derived Layout Providers.");
-		return false;
-	}
-	const uint32 Key = GetInputKey(Base.Get());
+	const uint32 Key = GetInputKey();
 	if (PreparedLayout && PreparedLayout->InputKey == Key) { return true; }
 	TSharedRef<FDeepLevelBuildingPreparedLayout> Layout = MakeShared<FDeepLevelBuildingPreparedLayout>();
 	Layout->InputKey = Key;
-	if (Base)
-	{
-		const int32 Mask = BuildingLine->CornerPlacementMask;
-		if (Mask < 0 || (Mask & ~static_cast<int32>(EDeepLevelCornerPlacementFlags::All)))
-		{
-			OutError = LOCTEXT("CornerMask", "Building corner placement mask is invalid.");
-			return false;
-		}
-		TArray<FBox2D> ExclusionBounds;
-		for (const TSoftObjectPtr<AActor>& ActorReference : RoadsideExclusionActors)
-		{
-			const AActor* Actor = ActorReference.Get();
-			if (!Actor || Actor->GetWorld() != GetWorld())
-			{
-				OutError = LOCTEXT("InvalidExclusionActor", "Roadside Exclusion Actors must be valid actors in the same level world.");
-				return false;
-			}
-			FVector Origin, Extent;
-			Actor->GetActorBounds(false, Origin, Extent);
-			if (Extent.X <= 0.0 || Extent.Y <= 0.0)
-			{
-				OutError = LOCTEXT("EmptyExclusionActor", "A Roadside Exclusion Actor has empty XY bounds.");
-				return false;
-			}
-			ExclusionBounds.Emplace(FVector2D(Origin - Extent), FVector2D(Origin + Extent));
-		}
-		if (!DeepLevelBuildingRoadside::BuildPlan(*Base, *Data, LayoutSourceGuid, RandomSeed, VarietyStrength,
-			CornerPreference, static_cast<EDeepLevelCornerPlacementFlags>(Mask), ExclusionBounds,
-			Layout->Plan, Layout->RejectedCount, OutError)) { return false; }
-	}
-	else if (!BuildPlan(Layout->Plan, OutError)) { return false; }
+	if (!BuildPlan(Layout->Plan, OutError)) { return false; }
 	for (const FDeepLevelBuildingLinePlacement& Placement : Layout->Plan.Placements)
 	{
 		const auto* Definition = Data->Buildings.FindByPredicate([&Placement](const auto& Entry) { return Entry.BuildingClass == Placement.BuildingClass; });
@@ -173,37 +106,10 @@ bool ADeepLevelPCGBuildingLineActor::PrepareLayout(FText& OutError) const
 	return true;
 }
 
-bool ADeepLevelPCGBuildingLineActor::BuildDerivedCityLayoutFragment(const ADeepLevelCityLayoutActor& LayoutOwner, const FDeepLevelCityGrid& Grid,
-	const FDeepLevelCityLayoutSnapshot& Base, FDeepLevelCityLayoutFragment& OutFragment, FText& OutError) const
-{
-	OutFragment = {};
-	FDeepLevelCityGrid OwnedGrid;
-	if (PathSource != EDeepLevelBuildingPathSource::RoadSidewalkEdges || CityLayout != &LayoutOwner
-		|| CityLayout->DerivedLayoutProviders.Num() != 1 || CityLayout->DerivedLayoutProviders[0] != this)
-	{
-		OutError = LOCTEXT("WrongDerivedMode", "Derived Layout Providers requires RoadSidewalkEdges mode and the same owning City Layout.");
-		return false;
-	}
-	if (!ResolveCityGrid(OwnedGrid, OutError)) { return false; }
-	if (!OwnedGrid.Origin.Equals(Grid.Origin) || OwnedGrid.TileSize != Grid.TileSize
-		|| OwnedGrid.ExtentInCells != Grid.ExtentInCells || OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells)
-	{
-		OutError = LOCTEXT("ForeignGrid", "Roadside Building cannot publish to another City Layout grid.");
-		return false;
-	}
-	Catalog.LoadSynchronous();
-	if (!bOutputCurrent || GeneratedInputKey != GetInputKey(&Base) || (PCGComponent && PCGComponent->IsGenerating()))
-	{
-		OutError = LOCTEXT("StaleOutput", "Roadside Building output is missing or out of date. Use Generate Buildings before regenerating City Decoration.");
-		return false;
-	}
-	OutFragment = GeneratedFragment;
-	return true;
-}
-
 void ADeepLevelPCGBuildingLineActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
+	SynchronizeCityLayoutRegistration();
 	if (!PCGComponent) { return; }
 	PCGComponent->GenerationTrigger = EPCGComponentGenerationTrigger::GenerateOnDemand;
 #if WITH_EDITORONLY_DATA
@@ -225,6 +131,11 @@ void ADeepLevelPCGBuildingLineActor::PostRegisterAllComponents()
 
 void ADeepLevelPCGBuildingLineActor::PostUnregisterAllComponents()
 {
+	if (ADeepLevelCityLayoutActor* Registered = RegisteredCityLayout.Get())
+	{
+		Registered->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout.Reset();
 	if (PCGComponent)
 	{
 		PCGComponent->OnPCGGraphStartGeneratingDelegate.RemoveAll(this);
@@ -236,6 +147,20 @@ void ADeepLevelPCGBuildingLineActor::PostUnregisterAllComponents()
 	FCoreUObjectDelegates::OnObjectPropertyChanged.RemoveAll(this);
 #endif
 	Super::PostUnregisterAllComponents();
+}
+
+void ADeepLevelPCGBuildingLineActor::SynchronizeCityLayoutRegistration()
+{
+	if (RegisteredCityLayout == CityLayout) { return; }
+	if (ADeepLevelCityLayoutActor* Previous = RegisteredCityLayout.Get())
+	{
+		Previous->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout = CityLayout;
+	if (CityLayout)
+	{
+		CityLayout->RegisterLayoutSource(*this);
+	}
 }
 
 void ADeepLevelPCGBuildingLineActor::GenerateBuildings()
@@ -251,13 +176,6 @@ void ADeepLevelPCGBuildingLineActor::GenerateBuildings()
 		return;
 	}
 	Modify();
-	if (PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges && BuildingLine && BuildingLine->GetNumberOfSplinePoints() < 2)
-	{
-		BuildingLine->ClearSplinePoints(false);
-		BuildingLine->AddSplinePoint(FVector(0.0, 0.0, 0.0), ESplineCoordinateSpace::Local, false);
-		BuildingLine->AddSplinePoint(FVector(100.0, 0.0, 0.0), ESplineCoordinateSpace::Local, false);
-		BuildingLine->UpdateSpline();
-	}
 	PCGComponent->GenerateLocal(true);
 #endif
 }
@@ -269,6 +187,8 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationStarted(UPCGComponent* Componen
 	if (!GetWorld() || GetWorld()->IsGameWorld() || !PrepareLayout(LastGenerationError))
 	{
 		if (LastGenerationError.IsEmpty()) { LastGenerationError = LOCTEXT("EditorOnly", "Building generation is editor-only."); }
+		UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
+		BroadcastBuildingFailure(LastGenerationError);
 		Component->CancelGeneration();
 		return;
 	}
@@ -329,6 +249,7 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 		LastGenerationError = Error.IsEmpty() ? LOCTEXT("OutputMismatch", "Building generation did not produce the accepted PLA plan, or its inputs changed during generation. Correct the graph/inputs and Generate Buildings again.") : Error;
 		GeneratingLayout.Reset();
 		UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
+		BroadcastBuildingFailure(LastGenerationError);
 		return;
 	}
 	GeneratedFragment = GeneratingLayout->Fragment;
@@ -336,19 +257,18 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 	bOutputCurrent = true;
 	GeneratingLayout.Reset();
 	MarkPackageDirty();
-	if (CityLayout && (CityLayout->LayoutProviders.Contains(this) || CityLayout->DerivedLayoutProviders.Contains(this)))
+	if (CityLayout)
 	{
-		if (CityLayout->DecorationSet)
-		{
-			CityLayout->DecorationComponent->Regenerate(false, Error);
-		}
-		else
-		{
-			TSet<FIntPoint> Dirty;
-			CityLayout->RebuildSnapshot(Dirty, Error);
-		}
+		SynchronizeCityLayoutRegistration();
+		TSet<FIntPoint> Dirty;
+		CityLayout->RefreshSnapshot(Dirty, Error);
 	}
 	LastGenerationError = Error;
+	if (!LastGenerationError.IsEmpty())
+	{
+		UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
+		BroadcastBuildingFailure(LastGenerationError);
+	}
 	UE_LOG(LogDeepLevelBuildingGeneration, Log, TEXT("Building generation: %d accepted, %d rejected by occupancy/footprint clearance."), GeneratedFragment.Anchors.Num() / 8, RejectedPlacementCount);
 }
 
@@ -357,6 +277,8 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCancelled(UPCGComponent* Compon
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
 	if (LastGenerationError.IsEmpty()) { LastGenerationError = LOCTEXT("Cancelled", "Building generation was cancelled; generate again before publishing the layout."); }
+	UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
+	BroadcastBuildingFailure(LastGenerationError);
 }
 
 void ADeepLevelPCGBuildingLineActor::OnGenerationCleaned(UPCGComponent* Component)
@@ -364,14 +286,7 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCleaned(UPCGComponent* Componen
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
 	GeneratedFragment = {};
-	MarkPackageDirty();
-}
-
-void ADeepLevelPCGBuildingLineActor::InvalidateDerivedLayout()
-{
-	PreparedLayout.Reset();
-	bOutputCurrent = false;
-	if (PCGComponent) { PCGComponent->NotifyPropertiesChangedFromBlueprint(); }
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	MarkPackageDirty();
 }
 
@@ -397,11 +312,8 @@ void ADeepLevelPCGBuildingLineActor::PostEditUndo()
 void ADeepLevelPCGBuildingLineActor::OnInputPropertyChanged(UObject* Object, FPropertyChangedEvent& Event)
 {
 	if (!Object || Object == this || !CityLayout) { return; }
-	const UActorComponent* Component = Cast<UActorComponent>(Object);
-	const AActor* Actor = Component ? Component->GetOwner() : Cast<AActor>(Object);
-	const bool bBaseProvider = PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges && Actor && CityLayout->LayoutProviders.Contains(Actor);
 	if (Object == Catalog.Get() || Object == CityLayout || Object == CityLayout->GridProfile
-		|| Object == CityLayout->SceneRoot || bBaseProvider)
+		|| Object == CityLayout->SceneRoot)
 	{
 		NotifyBuildingLayoutChanged();
 		MarkPackageDirty();

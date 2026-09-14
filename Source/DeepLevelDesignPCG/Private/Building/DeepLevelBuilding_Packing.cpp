@@ -293,13 +293,16 @@ namespace DeepLevelBuildingLinePacking
 
 		bool FindClearPlacement(
 			const FDeepLevelBuildingLinePath& Path,
+			const UDeepLevelBuildingPlacementCatalog& Catalog,
 			const FElementVariant& Element,
 			const double InitialCenter,
 			const double MaximumCenter,
 			const TArray<FClearanceShape>& ExistingShapes,
+			const bool bAllowInteriorFootprintOverlap,
+			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			FResolvedElement& OutElement)
 		{
-			auto Evaluate = [&Path, &Element, &ExistingShapes](const double Distance, FResolvedElement& Result)
+			auto Evaluate = [&Path, &Catalog, &Element, &ExistingShapes, bAllowInteriorFootprintOverlap, CandidateResolver](const double Distance, FResolvedElement& Result)
 			{
 				if (!Path.Sample(Distance, Result.PathSample))
 				{
@@ -311,12 +314,18 @@ namespace DeepLevelBuildingLinePacking
 				Result.Distance = Distance;
 				Result.CoverageStart = Distance - Element.HalfWidth;
 				Result.CoverageEnd = Distance + Element.HalfWidth;
+				const FDeepLevelBuildingPlacementDefinition& Definition = Catalog.Buildings[Element.BuildingIndex];
+				if (CandidateResolver && !(*CandidateResolver)(Definition, Element.Face, Result.PathSample))
+				{
+					return false;
+				}
 				Result.Shape = FClearance::MakeShape(
 					Result.PathSample,
 					Element.HalfWidth,
 					Element.HalfDepth,
 					Element.HalfHeight);
-				return !FClearance::IntersectsAny(Result.Shape, ExistingShapes);
+				return !FClearance::IntersectsAny(
+					Result.Shape, ExistingShapes, bAllowInteriorFootprintOverlap);
 			};
 
 			if (Evaluate(InitialCenter, OutElement))
@@ -360,7 +369,10 @@ namespace DeepLevelBuildingLinePacking
 			const bool bDistributeSlack,
 			const TArray<int32>& VariantIndices,
 			const TArray<FModuleVariant>& Variants,
+			const UDeepLevelBuildingPlacementCatalog& Catalog,
 			const TArray<FClearanceShape>& BaseShapes,
+			const bool bAllowInteriorFootprintOverlap,
+			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			TArray<FResolvedElement>& OutElements,
 			TArray<FClearanceShape>& OutShapes)
 		{
@@ -383,10 +395,13 @@ namespace DeepLevelBuildingLinePacking
 					FResolvedElement Resolved;
 					if (!FindClearPlacement(
 						Path,
+						Catalog,
 						Element,
 						Cursor + Element.HalfWidth,
 						SpanEnd - Element.HalfWidth,
 						CandidateShapes,
+						bAllowInteriorFootprintOverlap,
+						CandidateResolver,
 						Resolved))
 					{
 						return false;
@@ -417,6 +432,8 @@ namespace DeepLevelBuildingLinePacking
 		const double VarietyStrength,
 		const bool bHasBuildingAlternatives,
 		const bool bCloseLoop,
+		const bool bAllowInteriorFootprintOverlap,
+		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 		const FSelectionHistory& InitialHistory,
 		TArray<FClearanceShape>& InOutShapes,
 		TArray<FResolvedElement>& OutElements,
@@ -499,7 +516,10 @@ namespace DeepLevelBuildingLinePacking
 				bDistributeSlack,
 				Sequence,
 				Variants,
+				Catalog,
 				InOutShapes,
+				bAllowInteriorFootprintOverlap,
+				CandidateResolver,
 				CandidateElements,
 				CandidateShapes))
 			{

@@ -65,14 +65,13 @@ namespace DeepLevelRoadLayoutFragmentTests
 		return Tile;
 	}
 
-	UDeepLevelRoadTileCatalog* MakeCatalog(UObject* Outer, UDeepLevelCityGridProfile* GridProfile)
+	UDeepLevelRoadTileCatalog* MakeCatalog(UObject* Outer)
 	{
 		constexpr int32 PX = static_cast<int32>(EDeepLevelRoadConnection::PositiveX);
 		constexpr int32 PY = static_cast<int32>(EDeepLevelRoadConnection::PositiveY);
 		constexpr int32 NX = static_cast<int32>(EDeepLevelRoadConnection::NegativeX);
 		constexpr int32 NY = static_cast<int32>(EDeepLevelRoadConnection::NegativeY);
 		UDeepLevelRoadTileCatalog* Catalog = NewObject<UDeepLevelRoadTileCatalog>(Outer);
-		Catalog->GridProfile = GridProfile;
 		Catalog->Tiles = {
 			MakeTile(PX), MakeTile(PX | NX), MakeTile(PX | PY), MakeTile(PX | PY | NX),
 			MakeTile(PX | PY | NX | NY), MakeTile(PX | NX, PX), MakeTile()};
@@ -100,7 +99,7 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 	CityLayout->SetActorLocation(FVector(100.0, 200.0, 300.0));
 	ADeepLevelRoadNetworkActor* Network = World->SpawnActor<ADeepLevelRoadNetworkActor>();
 	Network->CityLayout = CityLayout;
-	Network->Catalog = MakeCatalog(Network, CityLayout->GridProfile);
+	Network->Catalog = MakeCatalog(Network);
 	UDeepLevelRoadSplineComponent* Spline = Network->CreateRoadBranch();
 	Spline->SetRoadPathFromWorldPoints({FVector(100.0, 200.0, 300.0), FVector(1100.0, 200.0, 300.0)});
 
@@ -155,12 +154,12 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 				First.Anchors[Index].Transform.GetLocation().Z > Grid.Origin.Z);
 		}
 	}
-	CityLayout->LayoutProviders.Add(Network);
+	CityLayout->RegisterLayoutSource(*Network);
 	TSet<FIntPoint> DirtyChunks;
-	TestTrue(TEXT("City Layout composes registered providers"), CityLayout->RebuildSnapshot(DirtyChunks, Error));
+	TestTrue(TEXT("City Layout composes registered sources"), CityLayout->RefreshSnapshot(DirtyChunks, Error));
 	TestTrue(TEXT("Initial composition reports populated dirty chunks"), !DirtyChunks.IsEmpty());
 	TestTrue(TEXT("City Layout owns the immutable composed snapshot"), CityLayout->GetSnapshot().IsValid());
-	TestTrue(TEXT("Unchanged composition rebuilds"), CityLayout->RebuildSnapshot(DirtyChunks, Error));
+	TestTrue(TEXT("Unchanged composition refreshes"), CityLayout->RefreshSnapshot(DirtyChunks, Error));
 	TestTrue(TEXT("Unchanged composition produces no dirty chunks"), DirtyChunks.IsEmpty());
 
 	UDeepLevelCityDecorationCategory* Category = NewObject<UDeepLevelCityDecorationCategory>(CityLayout);

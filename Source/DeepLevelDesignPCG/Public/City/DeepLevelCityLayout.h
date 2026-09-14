@@ -88,27 +88,21 @@ class DEEPLEVELDESIGNPCG_API ADeepLevelCityLayoutActor : public AActor
 
 public:
 	ADeepLevelCityLayoutActor();
+	virtual void OnConstruction(const FTransform& Transform) override;
 
 	bool ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
-	bool BuildBaseSnapshot(TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot, FText& OutError) const;
-	bool RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError);
-	void NotifyBaseLayoutChanged();
-	TSharedPtr<const FDeepLevelCityLayoutSnapshot> GetSnapshot() const { return Snapshot; }
+	void RegisterLayoutSource(AActor& Source);
+	void UnregisterLayoutSource(AActor& Source);
+	void InvalidateSnapshot();
+	bool RefreshSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError);
+	TSharedPtr<const FDeepLevelCityLayoutSnapshot> GetSnapshot() const { return bSnapshotCurrent ? Snapshot : nullptr; }
+	FSimpleMulticastDelegate OnGridOriginChanged;
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|City Decoration")
 	void RegenerateDecoration();
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|City Grid")
 	TObjectPtr<UDeepLevelCityGridProfile> GridProfile;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|City Grid", meta = (ClampMin = "1", UIMin = "1"))
-	FIntPoint ExtentInCells = FIntPoint(64, 64);
-
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|City Layout")
-	TArray<TObjectPtr<AActor>> LayoutProviders;
-
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|City Layout")
-	TArray<TObjectPtr<AActor>> DerivedLayoutProviders;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Decoration")
 	TObjectPtr<UDeepLevelCityDecorationSet> DecorationSet;
@@ -126,8 +120,9 @@ public:
 	TObjectPtr<UDeepLevelCityDecorationComponent> DecorationComponent;
 
 private:
-	bool BuildBaseFragments(TArray<struct FDeepLevelCityLayoutFragment>& OutFragments, FDeepLevelCityGrid& OutGrid, FText& OutError) const;
+	TSet<TWeakObjectPtr<AActor>> LayoutSources;
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
+	bool bSnapshotCurrent = false;
 };
 
 struct DEEPLEVELDESIGNPCG_API FDeepLevelCityGrid
@@ -135,10 +130,7 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityGrid
 	FVector Origin = FVector::ZeroVector;
 	double TileSize = 500.0;
 	int32 ChunkSizeInCells = 16;
-	FIntPoint ExtentInCells = FIntPoint(64, 64);
-
 	bool Validate(FText& OutError) const;
-	bool ContainsCell(const FIntPoint& Cell) const;
 	FIntPoint WorldToCell(const FVector& WorldPosition) const;
 	FVector CellToWorld(const FIntPoint& Cell) const;
 	FIntPoint CellToChunk(const FIntPoint& Cell) const;
@@ -280,28 +272,9 @@ class DEEPLEVELDESIGNPCG_API IDeepLevelCityLayoutProvider
 	GENERATED_BODY()
 
 public:
+	virtual const ADeepLevelCityLayoutActor* GetCityLayoutOwner() const = 0;
 	virtual bool BuildCityLayoutFragment(
 		const FDeepLevelCityGrid& Grid,
-		FDeepLevelCityLayoutFragment& OutFragment,
-		FText& OutError) const = 0;
-};
-
-UINTERFACE(MinimalAPI, meta = (CannotImplementInterfaceInBlueprint))
-class UDeepLevelCityDerivedLayoutProvider : public UInterface
-{
-	GENERATED_BODY()
-};
-
-class DEEPLEVELDESIGNPCG_API IDeepLevelCityDerivedLayoutProvider
-{
-	GENERATED_BODY()
-
-public:
-	virtual void InvalidateDerivedLayout() = 0;
-	virtual bool BuildDerivedCityLayoutFragment(
-		const ADeepLevelCityLayoutActor& LayoutOwner,
-		const FDeepLevelCityGrid& Grid,
-		const FDeepLevelCityLayoutSnapshot& BaseSnapshot,
 		FDeepLevelCityLayoutFragment& OutFragment,
 		FText& OutError) const = 0;
 };

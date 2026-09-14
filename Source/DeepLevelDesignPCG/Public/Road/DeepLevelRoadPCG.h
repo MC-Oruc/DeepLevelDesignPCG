@@ -98,10 +98,11 @@ class DEEPLEVELDESIGNPCG_API ADeepLevelRoadNetworkActor : public AActor, public 
 
 public:
 	ADeepLevelRoadNetworkActor();
-	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void PostLoad() override;
 	virtual void PostActorCreated() override;
 	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
+	virtual void PostRegisterAllComponents() override;
+	virtual void PostUnregisterAllComponents() override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "@Deep Level Design PCG|Road Network")
 	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
@@ -120,6 +121,7 @@ public:
 	bool ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
 	FVector GetGridOrigin() const;
 	double GetGridSize() const;
+	virtual const ADeepLevelCityLayoutActor* GetCityLayoutOwner() const override { return CityLayout; }
 	virtual bool BuildCityLayoutFragment(
 		const FDeepLevelCityGrid& Grid,
 		FDeepLevelCityLayoutFragment& OutFragment,
@@ -147,6 +149,9 @@ public:
 
 private:
 	void EnsureLayoutSourceGuid();
+	void SynchronizeCityLayoutRegistration();
+	void SynchronizeTransformToCityLayout();
+	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;
 	void OrganizeGeneratedRoadMeshes(UPCGComponent* GeneratedComponent);
 
 	UPROPERTY(VisibleAnywhere, Category = "@Deep Level Design PCG|Road Network")
@@ -345,10 +350,6 @@ class DEEPLEVELDESIGNPCG_API UDeepLevelRoadTileCatalog : public UDataAsset
 
 public:
 	bool ValidateForGeneration(FText& OutError) const;
-	double GetTileSize() const;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
-	TObjectPtr<UDeepLevelCityGridProfile> GridProfile;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "8", UIMin = "1", UIMax = "8"))
 	int32 SidewalkWidthInTiles = 2;

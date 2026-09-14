@@ -10,6 +10,7 @@
 #include "UObject/GCObject.h"
 #include "AdvancedPreviewScene.h"
 #include "SEditorViewport.h"
+#include "SplineComponentVisualizer.h"
 #include "Widgets/Views/SListView.h"
 #include "DeepLevelBuildingEditor.generated.h"
 
@@ -26,6 +27,21 @@ public:
 	virtual void OpenAssetEditor(const TArray<UObject*>& InObjects, TSharedPtr<IToolkitHost> EditWithinLevelEditor) override;
 private:
 	EAssetTypeCategories::Type Category;
+};
+
+class FDeepLevelRoadsideFrontageVisualizer final : public FSplineComponentVisualizer
+{
+public:
+	virtual void DrawVisualizationHUD(
+		const UActorComponent* Component,
+		const FViewport* Viewport,
+		const FSceneView* View,
+		FCanvas* Canvas) override;
+	virtual bool HandleInputKey(
+		FEditorViewportClient* ViewportClient,
+		FViewport* Viewport,
+		FKey Key,
+		EInputEvent Event) override;
 };
 
 

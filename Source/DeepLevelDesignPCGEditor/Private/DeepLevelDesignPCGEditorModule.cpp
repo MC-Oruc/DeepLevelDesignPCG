@@ -5,6 +5,8 @@
 #include "DeepLevelDesignPCGModule.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
+#include "Logging/MessageLog.h"
+#include "MessageLogModule.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "Road/DeepLevelRoadEditor.h"
@@ -29,6 +31,9 @@ public:
 		AssetCategory = AssetTools.RegisterAdvancedAssetCategory(
 			TEXT("DeepLevelDesignPCG"),
 			LOCTEXT("AssetCategory", "Deep Level Design PCG"));
+		FModuleManager::LoadModuleChecked<FMessageLogModule>(TEXT("MessageLog")).RegisterLogListing(
+			TEXT("DeepLevelDesignPCG"),
+			LOCTEXT("MessageLogLabel", "Deep Level Design PCG"));
 
 		RegisterAssetActions<FDeepLevelBuildingCatalogAssetTypeActions>(AssetTools);
 		RegisterAssetActions<FDeepLevelRoadTileCatalogAssetTypeActions>(AssetTools);
@@ -49,12 +54,19 @@ public:
 		Visualizers.RegisterComponentVisualizer(
 			UDeepLevelRoadNetworkRootComponent::StaticClass()->GetFName(),
 			RoadSplineVisualizer);
+		RoadsideFrontageVisualizer = MakeShared<FDeepLevelRoadsideFrontageVisualizer>();
+		Visualizers.RegisterComponentVisualizer(
+			UDeepLevelRoadsideFrontageSplineComponent::StaticClass()->GetFName(),
+			RoadsideFrontageVisualizer);
 		FSlateApplication::Get().RegisterInputPreProcessor(
 			StaticCastSharedPtr<IInputProcessor>(RoadSplineVisualizer));
 		FDeepLevelRoadEditorRefreshService::Initialize();
 		GenerationFailedHandle = FDeepLevelDesignPCGEditorEvents::OnGenerationFailed().AddRaw(
 			this,
 			&FDeepLevelDesignPCGEditorModule::ShowGenerationFailure);
+		GenerationWarningHandle = FDeepLevelDesignPCGEditorEvents::OnGenerationWarning().AddRaw(
+			this,
+			&FDeepLevelDesignPCGEditorModule::ShowGenerationWarning);
 	}
 
 	virtual void ShutdownModule() override
@@ -66,6 +78,13 @@ public:
 
 		FDeepLevelDesignPCGEditorEvents::OnGenerationFailed().Remove(GenerationFailedHandle);
 		GenerationFailedHandle.Reset();
+		FDeepLevelDesignPCGEditorEvents::OnGenerationWarning().Remove(GenerationWarningHandle);
+		GenerationWarningHandle.Reset();
+		if (FModuleManager::Get().IsModuleLoaded(TEXT("MessageLog")))
+		{
+			FModuleManager::GetModuleChecked<FMessageLogModule>(TEXT("MessageLog"))
+				.UnregisterLogListing(TEXT("DeepLevelDesignPCG"));
+		}
 		FDeepLevelRoadEditorRefreshService::Shutdown();
 		if (FSlateApplication::IsInitialized() && RoadSplineVisualizer.IsValid())
 		{
@@ -78,6 +97,12 @@ public:
 			GUnrealEd->UnregisterComponentVisualizer(UDeepLevelRoadNetworkRootComponent::StaticClass()->GetFName());
 		}
 		RoadSplineVisualizer.Reset();
+		if (GUnrealEd && RoadsideFrontageVisualizer.IsValid())
+		{
+			GUnrealEd->UnregisterComponentVisualizer(
+				UDeepLevelRoadsideFrontageSplineComponent::StaticClass()->GetFName());
+		}
+		RoadsideFrontageVisualizer.Reset();
 
 		if (FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 		{
@@ -104,10 +129,15 @@ public:
 private:
 	void ShowGenerationFailure(const FText& SystemName, const FText& Message) const
 	{
-		FNotificationInfo Info(FText::Format(
+		const FText Failure = FText::Format(
 			LOCTEXT("GenerationFailed", "{0} generation failed: {1}"),
 			SystemName,
-			Message));
+			Message);
+		FMessageLog MessageLog(TEXT("DeepLevelDesignPCG"));
+		MessageLog.Error(Failure);
+		MessageLog.Open(EMessageSeverity::Error, true);
+
+		FNotificationInfo Info(Failure);
 		Info.bFireAndForget = true;
 		Info.ExpireDuration = 8.0f;
 		Info.FadeOutDuration = 0.5f;
@@ -116,6 +146,22 @@ private:
 		{
 			Notification->SetCompletionState(SNotificationItem::CS_Fail);
 		}
+	}
+
+	void ShowGenerationWarning(const FText& SystemName, const FText& Message) const
+	{
+		const FText Warning = FText::Format(
+			LOCTEXT("GenerationWarning", "{0} generation warning: {1}"),
+			SystemName,
+			Message);
+		FMessageLog MessageLog(TEXT("DeepLevelDesignPCG"));
+		MessageLog.Warning(Warning);
+
+		FNotificationInfo Info(Warning);
+		Info.bFireAndForget = true;
+		Info.ExpireDuration = 6.0f;
+		Info.FadeOutDuration = 0.5f;
+		FSlateNotificationManager::Get().AddNotification(Info);
 	}
 
 	template <typename TAssetActions>
@@ -128,7 +174,9 @@ private:
 
 	EAssetTypeCategories::Type AssetCategory = EAssetTypeCategories::Misc;
 	TArray<TSharedPtr<IAssetTypeActions>> RegisteredAssetActions;
+	FDelegateHandle GenerationWarningHandle;
 	TSharedPtr<FDeepLevelRoadSplineComponentVisualizer> RoadSplineVisualizer;
+	TSharedPtr<FDeepLevelRoadsideFrontageVisualizer> RoadsideFrontageVisualizer;
 	FDelegateHandle GenerationFailedHandle;
 };
 

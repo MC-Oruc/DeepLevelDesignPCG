@@ -12,6 +12,12 @@ FDeepLevelGenerationFailed& FDeepLevelDesignPCGEditorEvents::OnGenerationFailed(
 	static FDeepLevelGenerationFailed Event;
 	return Event;
 }
+
+FDeepLevelGenerationWarning& FDeepLevelDesignPCGEditorEvents::OnGenerationWarning()
+{
+	static FDeepLevelGenerationWarning Event;
+	return Event;
+}
 #endif
 
 void FDeepLevelDesignPCGModule::StartupModule()

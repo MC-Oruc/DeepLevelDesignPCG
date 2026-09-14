@@ -4,8 +4,6 @@
 
 #include "Building/DeepLevelBuildingLayout.h"
 #include "Misc/AutomationTest.h"
-#include "PackedLevelActor/PackedLevelActor.h"
-#include "UObject/StrongObjectPtr.h"
 
 namespace DeepLevelBuildingRoadsideTests
 {
@@ -18,6 +16,16 @@ namespace DeepLevelBuildingRoadsideTests
 			Road.Cells.Add({FIntPoint(X, 0), static_cast<int32>(EDeepLevelCityOccupancy::Road), {}});
 			Road.Cells.Add({FIntPoint(X, 1), static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
 			Road.Cells.Add({FIntPoint(X, 2), static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
+			for (int32 Y = 1; Y <= 2; ++Y)
+			{
+				FDeepLevelCityAnchor& Surface = Road.Anchors.Emplace_GetRef();
+				Surface.StableId = FDeepLevelCityStableId::MakeAnchorId(
+					Road.SourceGuid, FString::Printf(TEXT("%d:%d"), X, Y), TEXT("SidewalkSurface"));
+				Surface.Geometry = EDeepLevelCityAnchorGeometry::Surface;
+				Surface.Transform = FTransform(FVector(X * 500.0, Y * 500.0, 0.0));
+				Surface.OccupiedCells.Add(FIntPoint(X, Y));
+				Surface.Tags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Surface);
+			}
 			FDeepLevelCityAnchor& Anchor = Road.Anchors.Emplace_GetRef();
 			Anchor.StableId = FDeepLevelCityStableId::MakeAnchorId(Road.SourceGuid, FString::FromInt(X), TEXT("SidewalkEdge"));
 			Anchor.Geometry = EDeepLevelCityAnchorGeometry::Segment;
@@ -29,90 +37,102 @@ namespace DeepLevelBuildingRoadsideTests
 		return Road;
 	}
 
-	TStrongObjectPtr<UDeepLevelBuildingPlacementCatalog> MakeCatalog()
+	FDeepLevelCityLayoutFragment MakeBlockLoop()
 	{
-		TStrongObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog(NewObject<UDeepLevelBuildingPlacementCatalog>());
-		FDeepLevelBuildingPlacementDefinition& Building = Catalog->Buildings.Emplace_GetRef();
-		Building.BuildingClass = APackedLevelActor::StaticClass();
-		Building.bCalibrated = true;
-		Building.PlacementVolume.Extent = FVector(250, 100, 100);
-		Building.PlacementVolume.Exposure.PositiveX = EDeepLevelStreetExposureRule::Forbidden;
-		Building.PlacementVolume.Exposure.NegativeX = EDeepLevelStreetExposureRule::Forbidden;
-		Building.PlacementVolume.Exposure.PositiveY = EDeepLevelStreetExposureRule::Forbidden;
-		Building.PlacementVolume.Exposure.NegativeY = EDeepLevelStreetExposureRule::Required;
-		return Catalog;
+		FDeepLevelCityLayoutFragment Road;
+		Road.SourceGuid = FGuid(20, 21, 22, 23);
+		const FIntPoint SidewalkCells[] = {FIntPoint(0, 1), FIntPoint(1, 0), FIntPoint(0, -1), FIntPoint(-1, 0)};
+		const FIntPoint Steps[] = {FIntPoint(0, -1), FIntPoint(-1, 0), FIntPoint(0, 1), FIntPoint(1, 0)};
+		const FVector Tangents[] = {FVector(-1, 0, 0), FVector(0, 1, 0), FVector(1, 0, 0), FVector(0, -1, 0)};
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			Road.Cells.Add({SidewalkCells[Index], static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
+			Road.Cells.Add({SidewalkCells[Index] - Steps[Index], static_cast<int32>(EDeepLevelCityOccupancy::Road), {}});
+			FDeepLevelCityAnchor& Surface = Road.Anchors.Emplace_GetRef();
+			Surface.StableId = FDeepLevelCityStableId::MakeAnchorId(Road.SourceGuid, FString::FromInt(Index), TEXT("SidewalkSurface"));
+			Surface.Geometry = EDeepLevelCityAnchorGeometry::Surface;
+			Surface.Transform = FTransform(FVector(SidewalkCells[Index].X * 500.0, SidewalkCells[Index].Y * 500.0, 0.0));
+			Surface.OccupiedCells.Add(SidewalkCells[Index]);
+			Surface.Tags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Surface);
+			FDeepLevelCityAnchor& Anchor = Road.Anchors.Emplace_GetRef();
+			Anchor.StableId = FDeepLevelCityStableId::MakeAnchorId(Road.SourceGuid, FString::FromInt(Index), TEXT("SidewalkEdge"));
+			Anchor.Geometry = EDeepLevelCityAnchorGeometry::Segment;
+			Anchor.Transform = FTransform(FRotationMatrix::MakeFromXZ(Tangents[Index], FVector::UpVector).ToQuat());
+			Anchor.Extent = FVector(250, 0, 0);
+			Anchor.OccupiedCells.Add(SidewalkCells[Index]);
+			Anchor.Tags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Edge);
+		}
+		return Road;
 	}
 
-	bool Plan(const TArray<FDeepLevelCityLayoutFragment>& Fragments, const UDeepLevelBuildingPlacementCatalog& Catalog,
-		FDeepLevelBuildingLinePlan& OutPlan, int32& Rejected, FText& Error)
-	{
-		FDeepLevelCityGrid Grid;
-		TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base;
-		return FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, Base, Error)
-			&& DeepLevelBuildingRoadside::BuildPlan(*Base, Catalog, FGuid(5, 6, 7, 8), 1337, 1.0, 1.0,
-				EDeepLevelCornerPlacementFlags::Inner, {}, OutPlan, Rejected, Error);
-	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelBuildingRoadsideBoundaryTest,
-	"DeepLevelDesignPCG.Building.Roadside.BoundaryAndDeterminism", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelBuildingRoadsideSplineTest,
+	"DeepLevelDesignPCG.Building.Roadside.FrontageSplines", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FDeepLevelBuildingRoadsideBoundaryTest::RunTest(const FString& Parameters)
+bool FDeepLevelBuildingRoadsideSplineTest::RunTest(const FString& Parameters)
 {
 	using namespace DeepLevelBuildingRoadsideTests;
-	auto Catalog = MakeCatalog();
-	auto Road = MakeRoad();
-	FDeepLevelBuildingLinePlan First, Second;
+	FDeepLevelCityLayoutFragment Road = MakeRoad();
+	FDeepLevelCityGrid Grid;
+	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base;
 	FText Error;
-	int32 Rejected = 0;
-	if (!TestTrue(TEXT("Road data produces a plan"), Plan({Road}, *Catalog, First, Rejected, Error))) { AddError(Error.ToString()); return false; }
-	TestEqual(TEXT("All six modules fit"), First.Placements.Num(), 6);
-	for (const auto& Placement : First.Placements)
+	const TArray<FDeepLevelCityLayoutFragment> Fragments = {Road};
+	if (!TestTrue(TEXT("Road snapshot builds"), FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, Base, Error)))
 	{
-		TestEqual(TEXT("Facade uses outer sidewalk boundary, not curb anchor"), Placement.PathSample.Location.Y, 1250.0);
-		TestTrue(TEXT("Building extends into block"), Placement.PathSample.Right.Equals(FVector::RightVector));
-		TestTrue(TEXT("Frontage identity assigned"), Placement.FrontageId.IsValid());
+		AddError(Error.ToString());
+		return false;
 	}
-	Road.Cells.Sort([](const auto& A, const auto& B) { return A.Cell.X > B.Cell.X; });
-	Road.Anchors.Sort([](const auto& A, const auto& B) { return B.StableId < A.StableId; });
-	TestTrue(TEXT("Reordered input remains valid"), Plan({Road}, *Catalog, Second, Rejected, Error));
-	TestEqual(TEXT("Input order does not change placement count"), Second.Placements.Num(), First.Placements.Num());
-	for (int32 Index = 0; Index < FMath::Min(First.Placements.Num(), Second.Placements.Num()); ++Index)
+	TArray<DeepLevelBuildingRoadside::FFrontageSpline> Splines;
+	if (!TestTrue(TEXT("Road produces frontage splines"), DeepLevelBuildingRoadside::BuildFrontageSplines(*Base, Splines, Error)))
 	{
-		TestTrue(TEXT("Positions remain deterministic"), First.Placements[Index].PathSample.Location.Equals(Second.Placements[Index].PathSample.Location));
-		TestEqual(TEXT("Frontage identity remains deterministic"), First.Placements[Index].FrontageId, Second.Placements[Index].FrontageId);
+		AddError(Error.ToString());
+		return false;
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelBuildingRoadsideClearanceTest,
-	"DeepLevelDesignPCG.Building.Roadside.ObstaclesAndEmptyOutput", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FDeepLevelBuildingRoadsideClearanceTest::RunTest(const FString& Parameters)
-{
-	using namespace DeepLevelBuildingRoadsideTests;
-	auto Catalog = MakeCatalog();
-	auto Road = MakeRoad();
-	FDeepLevelCityLayoutFragment ExistingBuilding;
-	ExistingBuilding.SourceGuid = FGuid(10, 11, 12, 13);
-	for (int32 X = 0; X < 6; ++X) { ExistingBuilding.Cells.Add({FIntPoint(X, 3), static_cast<int32>(EDeepLevelCityOccupancy::Building), {}}); }
-	FDeepLevelBuildingLinePlan Result;
-	FText Error;
-	int32 Rejected = 0;
-	TestTrue(TEXT("Fully obstructed frontage is valid empty output"), Plan({Road, ExistingBuilding}, *Catalog, Result, Rejected, Error));
-	TestEqual(TEXT("Existing buildings block all candidates"), Result.Placements.Num(), 0);
-	TestEqual(TEXT("Rejected candidate summary"), Rejected, 6);
-	Road.Anchors[2].Tags.AddTag(DeepLevelCityTags::Anchor_Road_Junction);
-	TestTrue(TEXT("Junction splits frontage"), Plan({Road}, *Catalog, Result, Rejected, Error));
-	for (const auto& Placement : Result.Placements)
+	TestEqual(TEXT("Continuous sidewalk becomes one spline"), Splines.Num(), 1);
+	if (Splines.Num() == 1)
 	{
-		TestTrue(TEXT("No facade inside junction approach"), FMath::Abs(Placement.PathSample.Location.X - 1000.0) >= 500.0 - 0.01);
+		TestFalse(TEXT("Straight frontage is open"), Splines[0].bClosed);
+		TestEqual(TEXT("Straight frontage keeps endpoints only"), Splines[0].Points.Num(), 2);
+		for (const FVector& Point : Splines[0].Points)
+		{
+			TestEqual(TEXT("Spline follows the block-side sidewalk boundary"), Point.Y, 1250.0);
+		}
 	}
-	Catalog->Buildings[0].PlacementVolume.Extent.X = 4000.0;
-	TestTrue(TEXT("Valid catalog with no fitting building returns empty output"), Plan({MakeRoad()}, *Catalog, Result, Rejected, Error));
-	TestTrue(TEXT("No fitting building produces no placements"), Result.Placements.IsEmpty());
-	Road.Anchors.Reset();
-	TestFalse(TEXT("Missing semantic edges is an error, not spline fallback"), Plan({Road}, *Catalog, Result, Rejected, Error));
+	Splines.Reset();
+	TestTrue(TEXT("Setback frontage builds"),
+		DeepLevelBuildingRoadside::BuildFrontageSplines(*Base, Splines, Error, 200.0));
+	if (Splines.Num() == 1)
+	{
+		for (const FVector& Point : Splines[0].Points)
+		{
+			TestEqual(TEXT("Setback moves frontage into the block"), Point.Y, 1450.0);
+		}
+	}
+	Splines.Reset();
+	TestTrue(TEXT("Negative setback frontage builds"),
+		DeepLevelBuildingRoadside::BuildFrontageSplines(*Base, Splines, Error, -200.0));
+	if (Splines.Num() == 1)
+	{
+		for (const FVector& Point : Splines[0].Points)
+		{
+			TestEqual(TEXT("Negative setback moves frontage toward the road"), Point.Y, 1050.0);
+		}
+	}
+	const TArray<FDeepLevelCityLayoutFragment> LoopFragments = {MakeBlockLoop()};
+	if (!TestTrue(TEXT("Block loop snapshot builds"), FDeepLevelCityLayoutBuilder::Build(Grid, LoopFragments, Base, Error)))
+	{
+		AddError(Error.ToString());
+		return false;
+	}
+	Splines.Reset();
+	TestTrue(TEXT("Connected corners produce frontage"), DeepLevelBuildingRoadside::BuildFrontageSplines(*Base, Splines, Error));
+	TestEqual(TEXT("One block boundary becomes one spline"), Splines.Num(), 1);
+	if (Splines.Num() == 1)
+	{
+		TestTrue(TEXT("Block boundary is closed"), Splines[0].bClosed);
+		TestEqual(TEXT("Block boundary keeps four corners"), Splines[0].Points.Num(), 4);
+	}
 	return true;
 }
 

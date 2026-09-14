@@ -11,11 +11,17 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(
 	const FText&,
 	const FText&);
 
+DECLARE_MULTICAST_DELEGATE_TwoParams(
+	FDeepLevelGenerationWarning,
+	const FText&,
+	const FText&);
+
 class DEEPLEVELDESIGNPCG_API FDeepLevelDesignPCGEditorEvents final
 {
 public:
 #if WITH_EDITOR
 	static FDeepLevelGenerationFailed& OnGenerationFailed();
+	static FDeepLevelGenerationWarning& OnGenerationWarning();
 #endif
 };
 

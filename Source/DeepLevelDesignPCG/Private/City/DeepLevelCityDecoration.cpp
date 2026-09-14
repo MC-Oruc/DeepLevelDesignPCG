@@ -2,6 +2,7 @@
 
 #include "City/DeepLevelCityDecoration.h"
 #include "DeepLevelDesignPCGModule.h"
+#include "DeepLevelDesignPCGModule.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityDecoration)
 
@@ -506,15 +507,18 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 		Layout->Modify();
 	}
 #endif
-	TSet<FIntPoint> DirtyChunks;
-	if (!Layout->RebuildSnapshot(DirtyChunks, OutError))
+	const TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot = Layout->GetSnapshot();
+	if (!Snapshot)
 	{
+		OutError = LOCTEXT("MissingLayoutSnapshot", "City Layout data is not current. Refresh the City Layout before generating decoration.");
 		LastGenerationError = OutError;
 		return false;
 	}
+	TSet<FIntPoint> DirtyChunks;
+	FDeepLevelCityLayoutBuilder::FindDirtyChunks(nullptr, *Snapshot, DirtyChunks);
 	TArray<FDeepLevelCityResolvedDecoration> Placements;
 	if (!FDeepLevelCityDecorationResolver::Resolve(
-		*Layout->GetSnapshot(),
+		*Snapshot,
 		*Layout->DecorationSet,
 		Layout->DecorationSeed,
 		Placements,
@@ -581,6 +585,10 @@ void UDeepLevelCityDecorationComponent::RegenerateInEditor()
 	if (!Regenerate(true, Error))
 	{
 		UE_LOG(LogTemp, Error, TEXT("City decoration generation failed: %s"), *Error.ToString());
+#if WITH_EDITOR
+		FDeepLevelDesignPCGEditorEvents::OnGenerationFailed().Broadcast(
+			LOCTEXT("CityDecorationSystemName", "City Decoration"), Error);
+#endif
 	}
 }
 

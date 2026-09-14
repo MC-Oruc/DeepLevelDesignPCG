@@ -227,11 +227,6 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 	FText& OutError) const
 {
 	OutFragment = {};
-	if (PathSource != EDeepLevelBuildingPathSource::AuthoredSpline)
-	{
-		OutError = NSLOCTEXT("DeepLevelBuildingLine", "WrongBaseMode", "Roadside Building must be registered in Derived Layout Providers, not Layout Providers.");
-		return false;
-	}
 	FDeepLevelCityGrid OwnedGrid;
 	if (!ResolveCityGrid(OwnedGrid, OutError))
 	{
@@ -239,8 +234,7 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 	}
 	if (!OwnedGrid.Origin.Equals(Grid.Origin, 0.01)
 		|| !FMath::IsNearlyEqual(OwnedGrid.TileSize, Grid.TileSize, 0.01)
-		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells
-		|| OwnedGrid.ExtentInCells != Grid.ExtentInCells)
+		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells)
 	{
 		OutError = NSLOCTEXT("DeepLevelBuildingLine", "ForeignCityGrid", "Building Line cannot build a fragment for a different City Layout grid.");
 		return false;
@@ -366,9 +360,10 @@ void ADeepLevelPCGBuildingLineActor::NotifyBuildingLayoutChanged()
 	{
 		PCGComponent->NotifyPropertiesChangedFromBlueprint();
 	}
-	if (PathSource == EDeepLevelBuildingPathSource::AuthoredSpline && CityLayout)
+	SynchronizeCityLayoutRegistration();
+	if (CityLayout)
 	{
-		CityLayout->NotifyBaseLayoutChanged();
+		CityLayout->InvalidateSnapshot();
 	}
 }
 
@@ -378,12 +373,6 @@ void ADeepLevelPCGBuildingLineActor::NotifyBuildingLayoutChanged()
 #if WITH_EDITOR
 bool UDeepLevelBuildingLineSplineComponent::CanEditChange(const FProperty* InProperty) const
 {
-	const auto* Owner = Cast<ADeepLevelPCGBuildingLineActor>(GetOwner());
-	if (Owner && Owner->PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges
-		&& InProperty && InProperty->GetFName() != GET_MEMBER_NAME_CHECKED(UDeepLevelBuildingLineSplineComponent, CornerPlacementMask))
-	{
-		return false;
-	}
 	return Super::CanEditChange(InProperty);
 }
 
@@ -444,7 +433,7 @@ FText UDeepLevelBuildingLinePCGSettings::GetDefaultNodeTitle() const
 
 	FText UDeepLevelBuildingLinePCGSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("NodeTooltip", "Emits the owning Building actor's accepted placement plan. Authored Spline input supplies metadata; RoadSidewalkEdges uses City Layout data.");
+	return LOCTEXT("NodeTooltip", "Emits the owning Building Line actor's accepted authored-spline placement plan.");
 }
 #endif
 
@@ -474,46 +463,39 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 
 	UPCGComponent* SourceComponent = Cast<UPCGComponent>(Context->ExecutionSource.Get());
 	UPCGComponent* OriginalComponent = SourceComponent ? SourceComponent->GetOriginalComponent() : nullptr;
-	const ADeepLevelPCGBuildingLineActor* BuildingActor = OriginalComponent
-		? Cast<ADeepLevelPCGBuildingLineActor>(OriginalComponent->GetOwner())
-		: nullptr;
-	if (!BuildingActor)
+	AActor* Owner = OriginalComponent ? OriginalComponent->GetOwner() : nullptr;
+	const IDeepLevelBuildingPlacementSource* BuildingSource = Owner
+		? Cast<IDeepLevelBuildingPlacementSource>(Owner) : nullptr;
+	if (!BuildingSource)
 	{
 		DeepLevelBuildingLinePCG::ReportGenerationError(
-			LOCTEXT("InvalidOwner", "DeepLevel Building Line node must run on a DeepLevel Building Line actor."), Context);
+			LOCTEXT("InvalidOwner", "DeepLevel Building Line node requires a Building placement source actor."), Context);
 		return true;
 	}
-	const TSharedPtr<const FDeepLevelBuildingPreparedLayout> Layout = BuildingActor->GetPreparedLayout();
-	if (!Layout || !BuildingActor->LastGenerationError.IsEmpty())
+	const TSharedPtr<const FDeepLevelBuildingPreparedLayout> Layout = BuildingSource->GetPreparedBuildingLayout();
+	const FText& GenerationError = BuildingSource->GetBuildingGenerationError();
+	if (!Layout || !GenerationError.IsEmpty())
 	{
 		DeepLevelBuildingLinePCG::ReportGenerationError(
-			BuildingActor->LastGenerationError.IsEmpty()
+			GenerationError.IsEmpty()
 				? LOCTEXT("UnpreparedBuilding", "Use Generate Buildings on the Building actor to prepare a valid placement plan.")
-				: BuildingActor->LastGenerationError, Context);
+				: GenerationError, Context);
 		Context->OutputData.bCancelExecution = true;
 		return true;
 	}
 	UPCGPointData* OutputData = FPCGContext::NewObject_AnyThread<UPCGPointData>(Context);
 	const TArray<FPCGTaggedData> Inputs = Context->InputData.GetInputsByPin(PCGPinConstants::DefaultInputLabel);
-	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline)
 	{
 		const UPCGSplineData* Spline = Inputs.Num() == 1 ? Cast<UPCGSplineData>(Inputs[0].Data) : nullptr;
-		if (!Spline)
+		if (BuildingSource->RequiresSingleBuildingSplineInput() && !Spline)
 		{
 			DeepLevelBuildingLinePCG::ReportGenerationError(LOCTEXT("AuthoredSplineInput", "Authored Spline mode requires the owning Building Line's single spline input."), Context);
 			Context->OutputData.bCancelExecution = true;
 			return true;
 		}
-		OutputData->InitializeFromData(Spline);
-	}
-	else
-	{
-		OutputData->TargetActor = const_cast<ADeepLevelPCGBuildingLineActor*>(BuildingActor);
-		if (Inputs.Num() > 0 && Inputs[0].Data && Inputs[0].Data->IsA<UPCGSpatialData>())
-		{
-			OutputData->InitializeFromData(Cast<UPCGSpatialData>(Inputs[0].Data));
-			OutputData->TargetActor = const_cast<ADeepLevelPCGBuildingLineActor*>(BuildingActor);
-		}
+		const UPCGSpatialData* SpatialInput = Inputs.IsEmpty()
+			? nullptr : Cast<UPCGSpatialData>(Inputs[0].Data);
+		OutputData->InitializeFromData(Spline ? Spline : SpatialInput);
 	}
 
 	const FName AttributeName = Settings->ActorClassAttribute.IsNone() ? TEXT("ActorClass") : Settings->ActorClassAttribute;
@@ -526,7 +508,7 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		return true;
 	}
 
-	const UDeepLevelBuildingPlacementCatalog* LoadedCatalog = BuildingActor->Catalog.LoadSynchronous();
+	const UDeepLevelBuildingPlacementCatalog* LoadedCatalog = BuildingSource->LoadBuildingCatalog();
 	TArray<FPCGPoint>& Points = OutputData->GetMutablePoints();
 	Points.Reserve(Layout->Plan.Placements.Num());
 	for (int32 Index = 0; Index < Layout->Plan.Placements.Num(); ++Index)
@@ -535,7 +517,7 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		FPCGPoint& Point = Points.Emplace_GetRef();
 		Point.Transform = Layout->Transforms[Index];
 		Point.Density = 1.0f;
-		Point.Seed = HashCombineFast(BuildingActor->RandomSeed, Placement.FrontageId.IsValid()
+		Point.Seed = HashCombineFast(BuildingSource->GetBuildingRandomSeed(), Placement.FrontageId.IsValid()
 			? HashCombineFast(GetTypeHash(Placement.FrontageId), GetTypeHash(Placement.CoverageStart)) : Index);
 
 		const FDeepLevelBuildingPlacementDefinition* Def = LoadedCatalog
@@ -559,12 +541,12 @@ bool DeepLevelBuildingLinePCG::FElement::ExecuteInternal(FPCGContext* Context) c
 		ActorClassAttribute->SetValue(Point.MetadataEntry, ClassPath);
 	}
 	FPCGTaggedData& Output = Context->OutputData.TaggedData.Emplace_GetRef();
-	if (BuildingActor->PathSource == EDeepLevelBuildingPathSource::AuthoredSpline && Inputs.Num() > 0) { Output.Tags = Inputs[0].Tags; }
+	if (Inputs.Num() > 0) { Output.Tags = Inputs[0].Tags; }
 	Output.Pin = PCGPinConstants::DefaultOutputLabel;
 	Output.Data = OutputData;
 
-	UE_LOG(LogPCG, Log, TEXT("DeepLevelBuildingLine: Emitted %d placement points for '%s' (PathSource=%d)."),
-		Points.Num(), *BuildingActor->GetName(), static_cast<int32>(BuildingActor->PathSource));
+	UE_LOG(LogPCG, Log, TEXT("DeepLevelBuildingLine: Emitted %d placement points for '%s'."),
+		Points.Num(), Owner ? *Owner->GetName() : TEXT("None"));
 
 	return true;
 }

@@ -1,8 +1,6 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Building/DeepLevelBuildingLayout.h"
-#include "Data/PCGSplineData.h"
-#include "UObject/StrongObjectPtr.h"
 
 #define LOCTEXT_NAMESPACE "DeepLevelBuildingRoadside"
 
@@ -14,10 +12,7 @@ namespace DeepLevelBuildingRoadside
 		FGuid Source;
 		FVector Start;
 		FVector End;
-		int32 Depth = 0;
 	};
-
-	using namespace DeepLevelBuildingLayoutGeometry;
 
 	FIntVector EndpointKey(const FVector& Point, const FDeepLevelCityGrid& Grid)
 	{
@@ -25,64 +20,129 @@ namespace DeepLevelBuildingRoadside
 			FMath::RoundToInt((Point.Y - Grid.Origin.Y) * 2.0 / Grid.TileSize), FMath::RoundToInt(Point.Z * 100.0));
 	}
 
-	bool BuildPlan(const FDeepLevelCityLayoutSnapshot& Base, const UDeepLevelBuildingPlacementCatalog& Catalog,
-		const FGuid& BuildingSource, const int32 Seed, const double Variety, const double CornerPreference,
-		const EDeepLevelCornerPlacementFlags Corners, const TConstArrayView<FBox2D> ExclusionBounds, FDeepLevelBuildingLinePlan& OutPlan,
-		int32& OutRejectedCount, FText& OutError)
+	void SimplifyPoints(TArray<FVector>& Points, const bool bClosed)
 	{
-		OutPlan = {};
-		OutRejectedCount = 0;
+		if (Points.Num() <= 2) { return; }
+		TArray<FVector> Simplified;
+		Simplified.Reserve(Points.Num());
+		for (int32 Index = 0; Index < Points.Num(); ++Index)
+		{
+			if (!bClosed && (Index == 0 || Index == Points.Num() - 1))
+			{
+				Simplified.Add(Points[Index]);
+				continue;
+			}
+			const FVector& Previous = Points[(Index - 1 + Points.Num()) % Points.Num()];
+			const FVector& Current = Points[Index];
+			const FVector& Next = Points[(Index + 1) % Points.Num()];
+			const FVector Incoming = (Current - Previous).GetSafeNormal2D();
+			const FVector Outgoing = (Next - Current).GetSafeNormal2D();
+			if (!Incoming.Equals(Outgoing, 0.001)) { Simplified.Add(Current); }
+		}
+		Points = MoveTemp(Simplified);
+	}
+
+	FVector LeftNormal(const FVector& Start, const FVector& End)
+	{
+		const FVector Direction = (End - Start).GetSafeNormal2D();
+		return FVector(-Direction.Y, Direction.X, 0.0);
+	}
+
+	FVector IntersectOffsetSegments(
+		const FVector& Previous, const FVector& Vertex, const FVector& Next, const double Setback)
+	{
+		const FVector PreviousDirection = (Vertex - Previous).GetSafeNormal2D();
+		const FVector NextDirection = (Next - Vertex).GetSafeNormal2D();
+		const FVector PreviousOrigin = Vertex + LeftNormal(Previous, Vertex) * Setback;
+		const FVector NextOrigin = Vertex + LeftNormal(Vertex, Next) * Setback;
+		const double Cross = PreviousDirection.X * NextDirection.Y - PreviousDirection.Y * NextDirection.X;
+		if (FMath::IsNearlyZero(Cross))
+		{
+			return Vertex + LeftNormal(Previous, Vertex) * Setback;
+		}
+		const FVector Delta = NextOrigin - PreviousOrigin;
+		const double Distance = (Delta.X * NextDirection.Y - Delta.Y * NextDirection.X) / Cross;
+		FVector Result = PreviousOrigin + PreviousDirection * Distance;
+		Result.Z = Vertex.Z;
+		return Result;
+	}
+
+	void ApplySetback(TArray<FVector>& Points, const bool bClosed, const double Setback)
+	{
+		if (FMath::IsNearlyZero(Setback) || Points.Num() < 2) { return; }
+		const TArray<FVector> Source = Points;
+		if (!bClosed)
+		{
+			Points[0] += LeftNormal(Source[0], Source[1]) * Setback;
+			Points.Last() += LeftNormal(Source[Source.Num() - 2], Source.Last()) * Setback;
+		}
+		const int32 FirstInterior = bClosed ? 0 : 1;
+		const int32 LastInterior = bClosed ? Source.Num() : Source.Num() - 1;
+		for (int32 Index = FirstInterior; Index < LastInterior; ++Index)
+		{
+			const int32 Previous = (Index - 1 + Source.Num()) % Source.Num();
+			const int32 Next = (Index + 1) % Source.Num();
+			Points[Index] = IntersectOffsetSegments(Source[Previous], Source[Index], Source[Next], Setback);
+		}
+	}
+
+	bool BuildFrontageSplines(const FDeepLevelCityLayoutSnapshot& Base,
+		TArray<FFrontageSpline>& OutSplines, FText& OutError, const double FrontageSetback)
+	{
+		OutSplines.Reset();
 		const FDeepLevelCityGrid& Grid = Base.GetGrid();
 		TArray<FEdge> Edges;
-		bool bFoundRoadEdge = false;
+		TMap<FIntPoint, const FDeepLevelCityAnchor*> SidewalkSurfaces;
 		for (const FDeepLevelCityAnchor& Anchor : Base.GetAnchors())
 		{
-			if (!Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Sidewalk_Edge))
+			if (Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Sidewalk_Surface)
+				&& Anchor.OccupiedCells.Num() == 1 && Anchor.SourceGuid.IsValid())
 			{
-				continue;
+				SidewalkSurfaces.Add(Anchor.OccupiedCells[0], &Anchor);
 			}
-			bFoundRoadEdge = true;
-			const FVector Tangent = Anchor.Transform.GetUnitAxis(EAxis::X);
-			const FVector Right = FVector::CrossProduct(FVector::UpVector, Tangent);
-			const FIntPoint Step(FMath::RoundToInt(Right.X), FMath::RoundToInt(Right.Y));
-			if (Anchor.Geometry != EDeepLevelCityAnchorGeometry::Segment || Anchor.OccupiedCells.Num() != 1
-				|| !Anchor.SourceGuid.IsValid() || FMath::Abs(Step.X) + FMath::Abs(Step.Y) != 1
-				|| !Right.Equals(FVector(Step.X, Step.Y, 0), 0.01))
-			{
-				OutError = LOCTEXT("InvalidEdge", "Roadside Building requires oriented, grid-aligned sidewalk edges with a source and one sidewalk cell.");
-				return false;
-			}
-			FIntPoint Cell = Anchor.OccupiedCells[0];
-			const FDeepLevelCityCellState* Road = Base.FindCell(Cell - Step);
-			if (!Road || !(Road->OccupancyMask & static_cast<int32>(EDeepLevelCityOccupancy::Road)))
-			{
-				OutError = LOCTEXT("MissingAdjacentRoad", "A sidewalk edge must face an adjacent Road cell.");
-				return false;
-			}
-			int32 Depth = 0;
-			while (const FDeepLevelCityCellState* Sidewalk = Base.FindCell(Cell))
-			{
-				if (!(Sidewalk->OccupancyMask & static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk))) { break; }
-				++Depth;
-				Cell += Step;
-			}
-			if (Depth == 0)
-			{
-				OutError = LOCTEXT("MissingSidewalk", "A sidewalk edge must reference a sidewalk cell.");
-				return false;
-			}
-			if (Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Road_Junction))
-			{
-				continue;
-			}
-			FVector Center = Grid.CellToWorld(Cell - Step) + Right * (Grid.TileSize * 0.5);
-			Center.Z = Anchor.Transform.GetLocation().Z;
-			Edges.Add({Anchor.StableId, Anchor.SourceGuid, Center - Tangent * (Grid.TileSize * 0.5),
-				Center + Tangent * (Grid.TileSize * 0.5), Depth});
 		}
-		if (!bFoundRoadEdge)
+		static const FIntPoint Directions[] = {
+			FIntPoint(1, 0), FIntPoint(0, 1), FIntPoint(-1, 0), FIntPoint(0, -1)};
+		const int32 RoadMask = static_cast<int32>(EDeepLevelCityOccupancy::Road);
+		const int32 SidewalkMask = static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk);
+		for (const TPair<FIntPoint, FDeepLevelCityCellState>& Pair : Base.GetCells())
 		{
-			OutError = LOCTEXT("MissingEdges", "Roadside Building requires Road sidewalk-edge data in the City Layout base snapshot.");
+			if (!(Pair.Value.OccupancyMask & SidewalkMask)) { continue; }
+			const FDeepLevelCityAnchor* const* Surface = SidewalkSurfaces.Find(Pair.Key);
+			if (!Surface)
+			{
+				OutError = LOCTEXT("MissingSidewalkSurface", "Every Road sidewalk cell must publish a matching sidewalk surface anchor.");
+				return false;
+			}
+			for (const FIntPoint& Direction : Directions)
+			{
+				const FIntPoint OutsideCell = Pair.Key + Direction;
+				const FDeepLevelCityCellState* Outside = Base.FindCell(OutsideCell);
+				if (Outside && (Outside->OccupancyMask & (RoadMask | SidewalkMask))) { continue; }
+				FIntPoint ProbeCell = Pair.Key - Direction;
+				const FDeepLevelCityCellState* Probe = Base.FindCell(ProbeCell);
+				while (Probe && (Probe->OccupancyMask & SidewalkMask))
+				{
+					ProbeCell -= Direction;
+					Probe = Base.FindCell(ProbeCell);
+				}
+				if (!Probe || !(Probe->OccupancyMask & RoadMask)) { continue; }
+
+				const FVector Right(Direction.X, Direction.Y, 0.0);
+				const FVector Tangent(Direction.Y, -Direction.X, 0.0);
+				FVector Center = Grid.CellToWorld(Pair.Key) + Right * (Grid.TileSize * 0.5);
+				Center.Z = (*Surface)->Transform.GetLocation().Z;
+				const FString LocalKey = FString::Printf(TEXT("Cell:%d:%d:Frontage:%d:%d"),
+					Pair.Key.X, Pair.Key.Y, Direction.X, Direction.Y);
+				const FGuid EdgeId = FDeepLevelCityStableId::MakeAnchorId(
+					(*Surface)->SourceGuid, LocalKey, TEXT("BuildingFrontage"));
+				Edges.Add({EdgeId, (*Surface)->SourceGuid, Center - Tangent * (Grid.TileSize * 0.5),
+					Center + Tangent * (Grid.TileSize * 0.5)});
+			}
+		}
+		if (Edges.IsEmpty())
+		{
+			OutError = LOCTEXT("MissingFrontage", "Road layout has no mathematically valid building frontage edges.");
 			return false;
 		}
 		Edges.Sort([](const FEdge& A, const FEdge& B) { return A.Id < B.Id; });
@@ -97,163 +157,63 @@ namespace DeepLevelBuildingRoadside
 			TArray<int32> Candidates;
 			Map.MultiFind(EndpointKey(Point, Grid), Candidates);
 			int32 Result = INDEX_NONE;
-			for (int32 Candidate : Candidates)
+			for (const int32 Candidate : Candidates)
 			{
-				if (Edges[Candidate].Source != Edge.Source || Edges[Candidate].Depth != Edge.Depth) { continue; }
-				if (FVector::DotProduct((Edge.End - Edge.Start).GetSafeNormal(),
-					(Edges[Candidate].End - Edges[Candidate].Start).GetSafeNormal()) < 0.99) { continue; }
+				if (Edges[Candidate].Source != Edge.Source) { continue; }
 				if (Result != INDEX_NONE) { return INDEX_NONE; }
 				Result = Candidate;
 			}
 			return Result;
 		};
 		TArray<int32> Next, Previous;
-		Next.Init(INDEX_NONE, Edges.Num()); Previous.Init(INDEX_NONE, Edges.Num());
+		Next.Init(INDEX_NONE, Edges.Num());
+		Previous.Init(INDEX_NONE, Edges.Num());
 		for (int32 Index = 0; Index < Edges.Num(); ++Index)
 		{
 			const int32 Neighbor = FindNeighbor(Starts, Edges[Index].End, Edges[Index]);
 			if (Neighbor != INDEX_NONE && FindNeighbor(Ends, Edges[Neighbor].Start, Edges[Neighbor]) == Index)
 			{
-				Next[Index] = Neighbor; Previous[Neighbor] = Index;
+				Next[Index] = Neighbor;
+				Previous[Neighbor] = Index;
 			}
 		}
-		TArray<FFootprint> AcceptedFootprints;
-		TMultiMap<FIntPoint, int32> FootprintsByCell;
 		TBitArray<> Visited(false, Edges.Num());
-		const auto OverlapsExclusion = [&ExclusionBounds](const FFootprint& Footprint)
-		{
-			for (const FBox2D& Bounds : ExclusionBounds)
-			{
-				const FFootprint Box = {Bounds.Min, FVector2D(Bounds.Max.X, Bounds.Min.Y), Bounds.Max, FVector2D(Bounds.Min.X, Bounds.Max.Y)};
-				if (FootprintsOverlap(Footprint, Box)) { return true; }
-			}
-			return false;
-		};
-		const auto IsClear = [&Base, &Grid, &AcceptedFootprints, &FootprintsByCell, &OverlapsExclusion](
-			const FDeepLevelBuildingPlacementDefinition& Definition,
-			const FDeepLevelBuildingLinePlacement& Placement,
-			FFootprint& OutFootprint,
-			TArray<FIntPoint>& OutCells)
-		{
-			const FTransform Transform = FDeepLevelBuildingPlacementGeometry::BuildActorTransform(Definition,
-				Placement.StreetFace, Placement.PathSample.Location, Placement.PathSample.Forward, Placement.PathSample.Right);
-			MakeFootprintCorners(Definition.PlacementVolume, Transform, OutFootprint);
-			RasterizeFootprint(Grid, OutFootprint, OutCells);
-			if (OverlapsExclusion(OutFootprint)) { return false; }
-			TSet<int32> Neighbors;
-			for (const FIntPoint& Cell : OutCells)
-			{
-				const FDeepLevelCityCellState* State = Base.FindCell(Cell);
-				if (!Grid.ContainsCell(Cell) || (State && State->OccupancyMask != 0)) { return false; }
-				TArray<int32> LocalNeighbors;
-				FootprintsByCell.MultiFind(Cell, LocalNeighbors);
-				for (const int32 Neighbor : LocalNeighbors) { Neighbors.Add(Neighbor); }
-			}
-			for (const int32 Neighbor : Neighbors)
-			{
-				if (FootprintsOverlap(OutFootprint, AcceptedFootprints[Neighbor])) { return false; }
-			}
-			return true;
-		};
-		// Open paths first; remaining paths are closed loops with a stable starting edge.
 		for (int32 Pass = 0; Pass < 2; ++Pass)
 		{
 			for (int32 Start = 0; Start < Edges.Num(); ++Start)
 			{
 				if (Visited[Start] || (Pass == 0 && Previous[Start] != INDEX_NONE)) { continue; }
-				TArray<FSplinePoint> Points;
+				FFrontageSpline Spline;
 				int32 Current = Start;
-				FGuid Frontage = Edges[Start].Id;
+				Spline.FrontageId = Edges[Start].Id;
 				while (Current != INDEX_NONE && !Visited[Current])
 				{
 					Visited[Current] = true;
-					Frontage = Edges[Current].Id < Frontage ? Edges[Current].Id : Frontage;
-					Points.Emplace(Points.Num(), Edges[Current].Start, ESplinePointType::Linear);
+					Spline.FrontageId = Edges[Current].Id < Spline.FrontageId ? Edges[Current].Id : Spline.FrontageId;
+					Spline.Points.Add(Edges[Current].Start);
 					const int32 Following = Next[Current];
-					if (Following == INDEX_NONE) { Points.Emplace(Points.Num(), Edges[Current].End, ESplinePointType::Linear); }
+					if (Following == INDEX_NONE) { Spline.Points.Add(Edges[Current].End); }
 					Current = Following;
 				}
-				const bool bClosed = Current == Start;
-				TStrongObjectPtr<UPCGSplineData> Spline(NewObject<UPCGSplineData>());
-				Spline->Initialize(Points, bClosed, FTransform::Identity);
-				FDeepLevelBuildingLinePath Path;
-				FDeepLevelBuildingLinePlan Candidates;
-				const int32 PathSeed = HashCombineFast(Seed, HashCombineFast(GetTypeHash(BuildingSource), GetTypeHash(Frontage)));
-				if (!FDeepLevelBuildingLinePath::Build(*Spline, Path, OutError)
-					|| !FDeepLevelBuildingLinePlanner::BuildPlan(Catalog, Path, PathSeed, Variety, CornerPreference, Corners, Candidates, OutError, true))
+				Spline.bClosed = Current == Start;
+				SimplifyPoints(Spline.Points, Spline.bClosed);
+				ApplySetback(Spline.Points, Spline.bClosed, FrontageSetback);
+				const int32 MinimumPointCount = Spline.bClosed ? 3 : 2;
+				if (Spline.Points.Num() >= MinimumPointCount)
 				{
-					return false;
-				}
-				for (FDeepLevelBuildingLinePlacement& Placement : Candidates.Placements)
-				{
-					const FDeepLevelBuildingPlacementDefinition* Definition = Catalog.Buildings.FindByPredicate(
-						[&Placement](const auto& Entry) { return Entry.BuildingClass == Placement.BuildingClass; });
-					check(Definition);
-					FFootprint Footprint;
-					TArray<FIntPoint> Cells;
-					if (!IsClear(*Definition, Placement, Footprint, Cells))
-					{
-						struct FAlternative
-						{
-							const FDeepLevelBuildingPlacementDefinition* Definition = nullptr;
-							EDeepLevelBuildingVolumeFace Face = EDeepLevelBuildingVolumeFace::NegativeY;
-							double Width = 0.0;
-							uint32 TieBreaker = 0;
-						};
-						const double SlotWidth = Placement.CoverageEnd - Placement.CoverageStart;
-						TArray<FAlternative> Alternatives;
-						for (int32 DefinitionIndex = 0; DefinitionIndex < Catalog.Buildings.Num(); ++DefinitionIndex)
-						{
-							const FDeepLevelBuildingPlacementDefinition& CandidateDefinition = Catalog.Buildings[DefinitionIndex];
-							if (CandidateDefinition.SelectionWeight <= 0.0) { continue; }
-							TArray<EDeepLevelBuildingVolumeFace> Faces;
-							DeepLevelBuildingLinePacking::FCatalogModel::GetEligibleFaces(CandidateDefinition, Faces);
-							for (const EDeepLevelBuildingVolumeFace Face : Faces)
-							{
-								if (!DeepLevelBuildingLinePacking::FCatalogModel::IsSpanFaceValid(CandidateDefinition, Face)) { continue; }
-								const FDeepLevelResolvedBuildingGeometry Geometry =
-									FDeepLevelBuildingPlacementGeometry::ResolveGeometry(CandidateDefinition, Face);
-								const double Width = Geometry.HalfWidth * 2.0;
-								if (Width > SlotWidth + UE_DOUBLE_KINDA_SMALL_NUMBER) { continue; }
-								Alternatives.Add({&CandidateDefinition, Face, Width, HashCombineFast(
-									GetTypeHash(PathSeed + FMath::RoundToInt(Placement.Distance)),
-									HashCombineFast(GetTypeHash(DefinitionIndex), GetTypeHash(static_cast<uint8>(Face))))});
-							}
-						}
-						Alternatives.Sort([](const FAlternative& A, const FAlternative& B)
-						{
-							if (!FMath::IsNearlyEqual(A.Width, B.Width)) { return A.Width > B.Width; }
-							return A.TieBreaker < B.TieBreaker;
-						});
-						bool bFoundAlternative = false;
-						for (const FAlternative& Alternative : Alternatives)
-						{
-							FDeepLevelBuildingLinePlacement Candidate = Placement;
-							Candidate.BuildingClass = Alternative.Definition->BuildingClass;
-							Candidate.StreetFace = Alternative.Face;
-							Candidate.CoverageStart = Candidate.Distance - Alternative.Width * 0.5;
-							Candidate.CoverageEnd = Candidate.Distance + Alternative.Width * 0.5;
-							FFootprint CandidateFootprint;
-							TArray<FIntPoint> CandidateCells;
-							if (!IsClear(*Alternative.Definition, Candidate, CandidateFootprint, CandidateCells)) { continue; }
-							Placement = MoveTemp(Candidate);
-							Footprint = MoveTemp(CandidateFootprint);
-							Cells = MoveTemp(CandidateCells);
-							bFoundAlternative = true;
-							break;
-						}
-						if (!bFoundAlternative) { ++OutRejectedCount; continue; }
-					}
-					const int32 AcceptedIndex = AcceptedFootprints.Add(Footprint);
-					for (const FIntPoint& Cell : Cells) { FootprintsByCell.Add(Cell, AcceptedIndex); }
-					Placement.FrontageId = Frontage;
-					OutPlan.Placements.Add(MoveTemp(Placement));
+					OutSplines.Add(MoveTemp(Spline));
 				}
 			}
+		}
+		if (OutSplines.IsEmpty())
+		{
+			OutError = LOCTEXT("MissingValidFrontage", "Road layout has no valid open or closed building frontage.");
+			return false;
 		}
 		OutError = FText::GetEmpty();
 		return true;
 	}
+
 }
 
 #undef LOCTEXT_NAMESPACE

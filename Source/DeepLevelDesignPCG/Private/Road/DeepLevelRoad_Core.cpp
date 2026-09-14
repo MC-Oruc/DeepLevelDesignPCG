@@ -97,17 +97,6 @@ void ADeepLevelRoadNetworkActor::EnsureLayoutSourceGuid()
 	}
 }
 
-void ADeepLevelRoadNetworkActor::OnConstruction(const FTransform& Transform)
-{
-	Super::OnConstruction(Transform);
-	TArray<UDeepLevelRoadSplineComponent*> Splines;
-	GetRoadSplineComponents(Splines);
-	for (UDeepLevelRoadSplineComponent* Spline : Splines)
-	{
-		Spline->NormalizePivotToFirstPoint();
-	}
-}
-
 UDeepLevelRoadSplineComponent* ADeepLevelRoadNetworkActor::CreateRoadBranch()
 {
 	check(RoadLines);
@@ -173,6 +162,46 @@ bool ADeepLevelRoadNetworkActor::ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FT
 
 }
 
+void ADeepLevelRoadNetworkActor::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+	SynchronizeCityLayoutRegistration();
+}
+
+void ADeepLevelRoadNetworkActor::PostUnregisterAllComponents()
+{
+	if (ADeepLevelCityLayoutActor* Registered = RegisteredCityLayout.Get())
+	{
+		Registered->OnGridOriginChanged.RemoveAll(this);
+		Registered->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout.Reset();
+	Super::PostUnregisterAllComponents();
+}
+
+void ADeepLevelRoadNetworkActor::SynchronizeCityLayoutRegistration()
+{
+	if (RegisteredCityLayout == CityLayout) { return; }
+	if (ADeepLevelCityLayoutActor* Previous = RegisteredCityLayout.Get())
+	{
+		Previous->OnGridOriginChanged.RemoveAll(this);
+		Previous->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout = CityLayout;
+	if (CityLayout)
+	{
+		CityLayout->RegisterLayoutSource(*this);
+		CityLayout->OnGridOriginChanged.AddUObject(this, &ThisClass::SynchronizeTransformToCityLayout);
+		SynchronizeTransformToCityLayout();
+	}
+}
+
+void ADeepLevelRoadNetworkActor::SynchronizeTransformToCityLayout()
+{
+	if (!CityLayout || GetActorLocation().Equals(CityLayout->GetActorLocation(), 0.01)) { return; }
+	SetActorLocation(CityLayout->GetActorLocation());
+}
+
 bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
 	const FDeepLevelCityGrid& Grid,
 	FDeepLevelCityLayoutFragment& OutFragment,
@@ -188,8 +217,7 @@ bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
 	}
 	if (!OwnedGrid.Origin.Equals(Grid.Origin, 0.01)
 		|| !FMath::IsNearlyEqual(OwnedGrid.TileSize, Grid.TileSize, 0.01)
-		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells
-		|| OwnedGrid.ExtentInCells != Grid.ExtentInCells)
+		|| OwnedGrid.ChunkSizeInCells != Grid.ChunkSizeInCells)
 	{
 		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "ForeignCityGrid", "Road Network cannot build a fragment for a different City Layout grid.");
 		return false;
@@ -396,7 +424,11 @@ void ADeepLevelRoadNetworkActor::NotifyRoadNetworkChanged(const EDeepLevelRoadNe
 	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents)
 	{
 		++LayoutRevision;
-		if (CityLayout) { CityLayout->NotifyBaseLayoutChanged(); }
+		SynchronizeCityLayoutRegistration();
+		if (CityLayout)
+		{
+			CityLayout->InvalidateSnapshot();
+		}
 	}
 	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && PCGComponent)
 	{
@@ -449,6 +481,8 @@ void ADeepLevelRoadNetworkActor::GenerateInitialRoadNetwork()
 void ADeepLevelRoadNetworkActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+	SynchronizeCityLayoutRegistration();
+	SynchronizeTransformToCityLayout();
 	NotifyRoadNetworkChanged();
 }
 
@@ -457,6 +491,7 @@ void ADeepLevelRoadNetworkActor::PostEditMove(const bool bFinished)
 	Super::PostEditMove(bFinished);
 	if (bFinished)
 	{
+		SynchronizeTransformToCityLayout();
 		NotifyRoadNetworkChanged();
 	}
 }
@@ -666,14 +701,6 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 		ReportGenerationError(Error, Context);
 		return true;
 	}
-	if (Catalog->GridProfile != Network->CityLayout->GridProfile)
-	{
-		ReportGenerationError(
-			LOCTEXT("GridProfileMismatch", "Road Network and Road Tile Catalog must reference the same City Grid Profile."),
-			Context);
-		return true;
-	}
-
 	TArray<UDeepLevelRoadSplineComponent*> SplineComponents;
 	Network->GetRoadSplineComponents(SplineComponents);
 	if (SplineComponents.IsEmpty())
@@ -764,24 +791,9 @@ namespace
 	}
 }
 
-double UDeepLevelRoadTileCatalog::GetTileSize() const
-{
-	return GridProfile ? GridProfile->TileSize : 0.0;
-}
-
 bool UDeepLevelRoadTileCatalog::ValidateForGeneration(FText& OutError) const
 {
 	OutError = FText::GetEmpty();
-	if (!GridProfile)
-	{
-		OutError = LOCTEXT("MissingGridProfile", "Road Tile Catalog requires a City Grid Profile.");
-		return false;
-	}
-	if (!GridProfile->Validate(OutError))
-	{
-		return false;
-	}
-	const double TileSize = GridProfile->TileSize;
 	if (SidewalkWidthInTiles < 1)
 	{
 		OutError = LOCTEXT("InvalidSidewalkWidth", "Road Tile Catalog sidewalk width must be at least one tile.");
@@ -834,16 +846,11 @@ bool UDeepLevelRoadTileCatalog::ValidateForGeneration(FText& OutError) const
 			OutError = FText::Format(LOCTEXT("InvalidVolume", "Road Tile Catalog entry {0} has an invalid placement volume."), FText::AsNumber(Index + 1));
 			return false;
 		}
-		const double TileWidth = Extent.X * 2.0;
-		const double TileDepth = Extent.Y * 2.0;
-		const double SizeTolerance = FMath::Max(TileSize * 0.01, 1.0);
-		if (!FMath::IsNearlyEqual(TileWidth, TileSize, SizeTolerance)
-			|| !FMath::IsNearlyEqual(TileDepth, TileSize, SizeTolerance))
+		if (!FMath::IsNearlyEqual(Extent.X, Extent.Y, 1.0))
 		{
 			OutError = FText::Format(
-				LOCTEXT("TileSizeMismatch", "Road Tile Catalog entry {0} must be a 1x1 tile calibrated to one {1} x {1} grid cell."),
-				FText::AsNumber(Index + 1),
-				FText::AsNumber(TileSize));
+				LOCTEXT("TileAspectMismatch", "Road Tile Catalog entry {0} must have a square 1x1 placement volume."),
+				FText::AsNumber(Index + 1));
 			return false;
 		}
 

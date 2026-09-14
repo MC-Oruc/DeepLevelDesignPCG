@@ -219,20 +219,33 @@ public:
 
 
 class UPCGComponent;
+class USceneComponent;
 class UDeepLevelBuildingLineSplineComponent;
 struct FDeepLevelBuildingLinePlan;
 struct FDeepLevelBuildingPreparedLayout;
 
-UENUM(BlueprintType)
-enum class EDeepLevelBuildingPathSource : uint8
+UINTERFACE(MinimalAPI)
+class UDeepLevelBuildingPlacementSource : public UInterface
 {
-	AuthoredSpline,
-	RoadSidewalkEdges
+	GENERATED_BODY()
+};
+
+class DEEPLEVELDESIGNPCG_API IDeepLevelBuildingPlacementSource
+{
+	GENERATED_BODY()
+
+public:
+	virtual TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedBuildingLayout() const = 0;
+	virtual UDeepLevelBuildingPlacementCatalog* LoadBuildingCatalog() const = 0;
+	virtual const FText& GetBuildingGenerationError() const = 0;
+	virtual int32 GetBuildingRandomSeed() const = 0;
+	virtual bool RequiresSingleBuildingSplineInput() const = 0;
 };
 
 /** Authoring actor for one open or closed building frontage. Buildings spawn on spline-right. */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
-class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor, public IDeepLevelCityLayoutProvider, public IDeepLevelCityDerivedLayoutProvider
+class DEEPLEVELDESIGNPCG_API ADeepLevelPCGBuildingLineActor : public AActor,
+	public IDeepLevelCityLayoutProvider, public IDeepLevelBuildingPlacementSource
 {
 	GENERATED_BODY()
 
@@ -243,13 +256,6 @@ public:
 	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
 	virtual void PostRegisterAllComponents() override;
 	virtual void PostUnregisterAllComponents() override;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line")
-	EDeepLevelBuildingPathSource PathSource = EDeepLevelBuildingPathSource::AuthoredSpline;
-
-	/** Optional level actors whose XY bounds block Roadside Building placement. */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Building Line", meta = (EditCondition = "PathSource == EDeepLevelBuildingPathSource::RoadSidewalkEdges", EditConditionHides))
-	TArray<TSoftObjectPtr<AActor>> RoadsideExclusionActors;
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Building Line")
 	void GenerateBuildings();
@@ -279,19 +285,18 @@ public:
 	double CornerPreference = 1.0;
 
 	bool ResolveCityGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const;
+	virtual const ADeepLevelCityLayoutActor* GetCityLayoutOwner() const override { return CityLayout; }
 	virtual bool BuildCityLayoutFragment(
 		const FDeepLevelCityGrid& Grid,
 		FDeepLevelCityLayoutFragment& OutFragment,
 		FText& OutError) const override;
-	virtual bool BuildDerivedCityLayoutFragment(
-		const ADeepLevelCityLayoutActor& LayoutOwner,
-		const FDeepLevelCityGrid& Grid,
-		const FDeepLevelCityLayoutSnapshot& BaseSnapshot,
-		FDeepLevelCityLayoutFragment& OutFragment,
-		FText& OutError) const override;
 	void NotifyBuildingLayoutChanged();
-	virtual void InvalidateDerivedLayout() override;
 	TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedLayout() const { return GeneratingLayout; }
+	virtual TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedBuildingLayout() const override { return GeneratingLayout; }
+	virtual UDeepLevelBuildingPlacementCatalog* LoadBuildingCatalog() const override { return Catalog.LoadSynchronous(); }
+	virtual const FText& GetBuildingGenerationError() const override { return LastGenerationError; }
+	virtual int32 GetBuildingRandomSeed() const override { return RandomSeed; }
+	virtual bool RequiresSingleBuildingSplineInput() const override { return true; }
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -307,10 +312,11 @@ public:
 
 private:
 	void EnsureLayoutSourceGuid();
+	void SynchronizeCityLayoutRegistration();
 	bool BuildPlan(FDeepLevelBuildingLinePlan& OutPlan, FText& OutError) const;
 	bool PrepareLayout(FText& OutError) const;
 	void BuildFragment(const FDeepLevelBuildingLinePlan& Plan, FDeepLevelCityLayoutFragment& OutFragment) const;
-	uint32 GetInputKey(const FDeepLevelCityLayoutSnapshot* Base) const;
+	uint32 GetInputKey() const;
 	void OnGenerationStarted(UPCGComponent* Component);
 	void OnGenerationCompleted(UPCGComponent* Component);
 	void OnGenerationCancelled(UPCGComponent* Component);
@@ -332,6 +338,150 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Building Line")
 	int32 LayoutRevision = 0;
+	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;
+};
+
+UENUM()
+enum class EDeepLevelRoadsideFrontageKind : uint8
+{
+	Automatic,
+	Add,
+	Replace
+};
+
+UCLASS(ClassGroup = (Procedural))
+class DEEPLEVELDESIGNPCG_API UDeepLevelRoadsideFrontageSplineComponent : public USplineComponent
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Frontage")
+	EDeepLevelRoadsideFrontageKind Kind = EDeepLevelRoadsideFrontageKind::Automatic;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Frontage")
+	FGuid FrontageId;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Frontage")
+	FGuid ReplacedFrontageId;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Frontage")
+	bool bExcluded = false;
+};
+
+/** Building-domain authoring actor that derives and overrides frontage splines from City Layout road semantics. */
+UCLASS(BlueprintType, ClassGroup = (Procedural))
+class DEEPLEVELDESIGNPCG_API ADeepLevelPCGRoadsideBuildingActor : public AActor,
+	public IDeepLevelBuildingPlacementSource
+{
+	GENERATED_BODY()
+
+public:
+	ADeepLevelPCGRoadsideBuildingActor();
+
+	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Roadside Building")
+	void GenerateFrontageSplines();
+
+	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Roadside Building")
+	void GenerateBuildings();
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
+
+	/** Signed distance from the outer sidewalk boundary. Positive moves into the block; negative moves toward the road. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building",
+		meta = (Units = "cm"))
+	double FrontageSetback = -200.0;
+
+	/** Allowed lateral search distance around the preferred frontage line. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building",
+		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm"))
+	double FrontageDepthTolerance = 500.0;
+
+	/** Minimum distance kept between a decorative building footprint and a closed block boundary. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building",
+		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm"))
+	double BlockBoundaryMargin = 5.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	TSoftObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 RandomSeed = 1337;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building|Variation",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	double VarietyStrength = 1.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building|Variation",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	double CornerPreference = 1.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building|Variation",
+		meta = (DisplayName = "Corner Placement", Bitmask,
+			BitmaskEnum = "/Script/DeepLevelDesignPCG.EDeepLevelCornerPlacementFlags"))
+	int32 CornerPlacementMask = static_cast<int32>(EDeepLevelCornerPlacementFlags::Inner);
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	FText LastGenerationError;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 FrontageSplineCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 OpenFrontageSplineCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 ClosedFrontageSplineCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 BuildingPlacementCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 RejectedPlacementCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	bool bOutputCurrent = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building|Components")
+	TObjectPtr<USceneComponent> SceneRoot;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|PCG|Components")
+	TObjectPtr<UPCGComponent> PCGComponent;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Building")
+	TArray<TObjectPtr<UDeepLevelRoadsideFrontageSplineComponent>> FrontageSplines;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Deep Level Design PCG|Roadside Building")
+	TArray<FGuid> ExcludedFrontageIds;
+
+#if WITH_EDITOR
+	void ToggleFrontageExclusion(const UDeepLevelRoadsideFrontageSplineComponent& Frontage);
+	void CreateFrontageOverride(const UDeepLevelRoadsideFrontageSplineComponent& Source, bool bReplace);
+	void RemoveFrontageOverride(UDeepLevelRoadsideFrontageSplineComponent& Frontage);
+#endif
+	virtual TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedBuildingLayout() const override { return GeneratingLayout; }
+	virtual UDeepLevelBuildingPlacementCatalog* LoadBuildingCatalog() const override { return Catalog.LoadSynchronous(); }
+	virtual const FText& GetBuildingGenerationError() const override { return LastGenerationError; }
+	virtual int32 GetBuildingRandomSeed() const override { return RandomSeed; }
+	virtual bool RequiresSingleBuildingSplineInput() const override { return false; }
+
+protected:
+	virtual void PostRegisterAllComponents() override;
+	virtual void PostUnregisterAllComponents() override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
+private:
+	UDeepLevelRoadsideFrontageSplineComponent* CreateFrontageComponent(
+		FName Name, EObjectFlags Flags, EDeepLevelRoadsideFrontageKind Kind);
+	bool PrepareBuildingLayout(FText& OutError);
+	void OnBuildingGenerationStarted(UPCGComponent* Component);
+	void OnBuildingGenerationCompleted(UPCGComponent* Component);
+	void OnBuildingGenerationCancelled(UPCGComponent* Component);
+	void OnBuildingGenerationCleaned(UPCGComponent* Component);
+	TSharedPtr<const FDeepLevelBuildingPreparedLayout> PreparedLayout;
+	TSharedPtr<const FDeepLevelBuildingPreparedLayout> GeneratingLayout;
 };
 
 struct FDeepLevelBuildingLinePathSample
@@ -413,7 +563,8 @@ namespace DeepLevelBuildingLinePacking
 		static bool FacadesIntersect(const FFacadeSegment& A, const FFacadeSegment& B);
 		static double ProjectRadius(const FFootprint& Footprint, const FVector2D& Axis);
 		static bool FootprintsOverlap(const FFootprint& A, const FFootprint& B);
-		static bool IntersectsAny(const FClearanceShape& Shape, const TArray<FClearanceShape>& ExistingShapes);
+		static bool IntersectsAny(const FClearanceShape& Shape, const TArray<FClearanceShape>& ExistingShapes,
+			bool bIgnoreFootprintOverlap = false);
 		static FClearanceShape MakeShape(
 			const FDeepLevelBuildingLinePathSample& Sample,
 			double HalfWidth,
@@ -445,6 +596,11 @@ class FDeepLevelBuildingLinePath;
 class UDeepLevelBuildingPlacementCatalog;
 struct FDeepLevelBuildingLinePlan;
 
+using FDeepLevelBuildingPlacementCandidateResolver = TFunction<bool(
+	const FDeepLevelBuildingPlacementDefinition&,
+	EDeepLevelBuildingVolumeFace,
+	FDeepLevelBuildingLinePathSample&)>;
+
 /** Internal deterministic optimizer for spline building packing. */
 class FDeepLevelBuildingLinePackingSolver
 {
@@ -458,7 +614,10 @@ public:
 		EDeepLevelCornerPlacementFlags CornerPlacement,
 		FDeepLevelBuildingLinePlan& OutPlan,
 		FText& OutError,
-		bool bAllowEmpty = false);
+		bool bAllowEmpty = false,
+		bool bSkipUnplaceableCorners = false,
+		bool bAllowInteriorFootprintOverlap = false,
+		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver = nullptr);
 };
 
 
@@ -596,6 +755,7 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelBuildingLinePlacement
 struct DEEPLEVELDESIGNPCG_API FDeepLevelBuildingLinePlan
 {
 	TArray<FDeepLevelBuildingLinePlacement> Placements;
+	TArray<int32> SkippedCornerIndices;
 	double UsedLength = 0.0;
 	double StartOffset = 0.0;
 };
@@ -613,7 +773,10 @@ public:
 		EDeepLevelCornerPlacementFlags CornerPlacement,
 		FDeepLevelBuildingLinePlan& OutPlan,
 		FText& OutError,
-		bool bAllowEmpty = false);
+		bool bAllowEmpty = false,
+		bool bSkipUnplaceableCorners = false,
+		bool bAllowInteriorFootprintOverlap = false,
+		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver = nullptr);
 };
 
 
@@ -634,9 +797,11 @@ namespace DeepLevelBuildingLinePacking
 			int32 Seed,
 			int32 SelectionIndex,
 			double VarietyStrength,
-			bool bHasBuildingAlternatives,
-			bool bCloseLoop,
-			const FSelectionHistory& InitialHistory,
+		bool bHasBuildingAlternatives,
+		bool bCloseLoop,
+		bool bAllowInteriorFootprintOverlap,
+		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
+		const FSelectionHistory& InitialHistory,
 			TArray<FClearanceShape>& InOutShapes,
 			TArray<FResolvedElement>& OutElements,
 			FSelectionHistory& OutHistory);

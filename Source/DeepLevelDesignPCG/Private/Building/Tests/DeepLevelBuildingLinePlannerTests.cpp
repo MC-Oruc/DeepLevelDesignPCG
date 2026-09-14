@@ -837,6 +837,21 @@ bool FDeepLevelBuildingLineCornerPlacementPolicyTest::RunTest(const FString& Par
 			return Placement.bCornerPlacement;
 		}));
 
+	UDeepLevelBuildingPlacementCatalog* StraightOnlyCatalog = NewObject<UDeepLevelBuildingPlacementCatalog>();
+	StraightOnlyCatalog->Buildings.Add(
+		DeepLevelBuildingLinePlannerTests::MakeBuilding(AActor::StaticClass(), 200.0));
+	FDeepLevelBuildingLinePlan SkippedCornerPlan;
+	TestTrue(
+		TEXT("Roadside policy skips an unplaceable corner and continues"),
+		FDeepLevelBuildingLinePlanner::BuildPlan(
+			*StraightOnlyCatalog, OuterPath, 13, 1.0, 1.0, EDeepLevelCornerPlacementFlags::All,
+			SkippedCornerPlan, Error, true, true));
+	TestEqual(TEXT("Skipped corner is reported"), SkippedCornerPlan.SkippedCornerIndices.Num(), 1);
+	if (!SkippedCornerPlan.SkippedCornerIndices.IsEmpty())
+	{
+		TestEqual(TEXT("Skipped corner keeps its one-based index"), SkippedCornerPlan.SkippedCornerIndices[0], 1);
+	}
+
 	FDeepLevelBuildingLinePath InnerPath;
 	TestTrue(TEXT("Inner corner path builds"), DeepLevelBuildingLinePlannerTests::MakePath(
 		{

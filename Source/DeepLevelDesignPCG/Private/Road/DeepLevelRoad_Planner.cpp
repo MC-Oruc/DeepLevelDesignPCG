@@ -561,11 +561,19 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 	{
 		return false;
 	}
-	if (!FMath::IsNearlyEqual(Grid.TileSize, Catalog.GridProfile->TileSize, 0.01)
-		|| Grid.ChunkSizeInCells != Catalog.GridProfile->ChunkSizeInCells)
+	const double SizeTolerance = FMath::Max(Grid.TileSize * 0.01, 1.0);
+	for (int32 Index = 0; Index < Catalog.Tiles.Num(); ++Index)
 	{
-		OutError = LOCTEXT("GridProfileMismatch", "Road Tile Catalog does not match the City Layout grid.");
-		return false;
+		const FVector Extent = Catalog.Tiles[Index].PlacementVolume.Extent;
+		if (!FMath::IsNearlyEqual(Extent.X * 2.0, Grid.TileSize, SizeTolerance)
+			|| !FMath::IsNearlyEqual(Extent.Y * 2.0, Grid.TileSize, SizeTolerance))
+		{
+			OutError = FText::Format(
+				LOCTEXT("TileSizeMismatch", "Road Tile Catalog entry {0} must be calibrated to the City Layout tile size of {1}."),
+				FText::AsNumber(Index + 1),
+				FText::AsNumber(Grid.TileSize));
+			return false;
+		}
 	}
 	if (Splines.IsEmpty())
 	{

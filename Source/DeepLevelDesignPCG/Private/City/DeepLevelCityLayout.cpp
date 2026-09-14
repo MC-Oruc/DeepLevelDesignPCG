@@ -2,6 +2,7 @@
 
 #include "City/DeepLevelCityLayout.h"
 #include "City/DeepLevelCityDecoration.h"
+#include "DeepLevelDesignPCGModule.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityLayout)
 
@@ -50,6 +51,13 @@ ADeepLevelCityLayoutActor::ADeepLevelCityLayoutActor()
 	DecorationComponent = CreateDefaultSubobject<UDeepLevelCityDecorationComponent>(TEXT("CityDecoration"));
 }
 
+void ADeepLevelCityLayoutActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	InvalidateSnapshot();
+	OnGridOriginChanged.Broadcast();
+}
+
 bool ADeepLevelCityLayoutActor::ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& OutError) const
 {
 	OutGrid = {};
@@ -62,11 +70,6 @@ bool ADeepLevelCityLayoutActor::ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& 
 	{
 		return false;
 	}
-	if (ExtentInCells.X < 1 || ExtentInCells.Y < 1)
-	{
-		OutError = LOCTEXT("InvalidCityGridBounds", "City Layout grid extents must be at least one cell.");
-		return false;
-	}
 	if (!GetActorRotation().IsNearlyZero() || !GetActorScale3D().Equals(FVector::OneVector))
 	{
 		OutError = LOCTEXT("TransformedCityGrid", "City Layout supports translation only; rotation and scale must remain unchanged.");
@@ -76,83 +79,54 @@ bool ADeepLevelCityLayoutActor::ResolveGrid(FDeepLevelCityGrid& OutGrid, FText& 
 	OutGrid.Origin = GetActorLocation();
 	OutGrid.TileSize = GridProfile->TileSize;
 	OutGrid.ChunkSizeInCells = GridProfile->ChunkSizeInCells;
-	OutGrid.ExtentInCells = ExtentInCells;
 	return OutGrid.Validate(OutError);
 }
 
-bool ADeepLevelCityLayoutActor::BuildBaseFragments(
-	TArray<FDeepLevelCityLayoutFragment>& Fragments, FDeepLevelCityGrid& Grid, FText& OutError) const
+void ADeepLevelCityLayoutActor::RegisterLayoutSource(AActor& Source)
 {
-	Fragments.Reset();
-	if (!ResolveGrid(Grid, OutError))
-	{
-		return false;
-	}
-	if (DerivedLayoutProviders.Num() > 1)
-	{
-		OutError = LOCTEXT("MultipleDerivedProviders", "City Layout supports one Roadside Building provider. Use Authored Spline for additional building lines.");
-		return false;
-	}
-	TSet<const AActor*> Providers;
-	for (const AActor* Actor : DerivedLayoutProviders)
-	{
-		if (!Cast<IDeepLevelCityDerivedLayoutProvider>(Actor) || LayoutProviders.Contains(Actor))
-		{
-			OutError = LOCTEXT("InvalidDerivedProvider", "Derived Layout Providers requires a derived provider registered only in this list.");
-			return false;
-		}
-	}
-	Fragments.Reserve(LayoutProviders.Num());
-	for (AActor* ProviderActor : LayoutProviders)
-	{
-		const IDeepLevelCityLayoutProvider* Provider = Cast<IDeepLevelCityLayoutProvider>(ProviderActor);
-		if (!Provider || Providers.Contains(ProviderActor))
-		{
-			OutError = LOCTEXT("InvalidLayoutProvider", "City Layout contains an actor that does not provide a city layout fragment.");
-			return false;
-		}
-		Providers.Add(ProviderActor);
-		FDeepLevelCityLayoutFragment& Fragment = Fragments.Emplace_GetRef();
-		if (!Provider->BuildCityLayoutFragment(Grid, Fragment, OutError))
-		{
-			return false;
-		}
-	}
-	return true;
+	check(Source.GetClass()->ImplementsInterface(UDeepLevelCityLayoutProvider::StaticClass()));
+	LayoutSources.Add(&Source);
+	InvalidateSnapshot();
 }
 
-bool ADeepLevelCityLayoutActor::BuildBaseSnapshot(
-	TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot, FText& OutError) const
+void ADeepLevelCityLayoutActor::UnregisterLayoutSource(AActor& Source)
 {
-	TArray<FDeepLevelCityLayoutFragment> Fragments;
-	FDeepLevelCityGrid Grid;
-	return BuildBaseFragments(Fragments, Grid, OutError)
-		&& FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, OutSnapshot, OutError);
+	LayoutSources.Remove(&Source);
+	InvalidateSnapshot();
 }
 
-bool ADeepLevelCityLayoutActor::RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError)
+void ADeepLevelCityLayoutActor::InvalidateSnapshot()
+{
+	bSnapshotCurrent = false;
+}
+
+bool ADeepLevelCityLayoutActor::RefreshSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError)
 {
 	OutDirtyChunks.Reset();
 	TArray<FDeepLevelCityLayoutFragment> Fragments;
 	FDeepLevelCityGrid Grid;
-	if (!BuildBaseFragments(Fragments, Grid, OutError))
+	if (!ResolveGrid(Grid, OutError))
 	{
 		return false;
 	}
-	if (!DerivedLayoutProviders.IsEmpty())
+	for (auto It = LayoutSources.CreateIterator(); It; ++It)
 	{
-		TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base;
-		if (!FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, Base, OutError))
+		AActor* Source = It->Get();
+		if (!Source)
 		{
+			It.RemoveCurrent();
+			continue;
+		}
+		const IDeepLevelCityLayoutProvider* Provider = Cast<IDeepLevelCityLayoutProvider>(Source);
+		if (!Provider || Provider->GetCityLayoutOwner() != this)
+		{
+			OutError = LOCTEXT("InvalidLayoutSource", "A registered City Layout source no longer belongs to this City Layout.");
 			return false;
 		}
-		for (const AActor* Actor : DerivedLayoutProviders)
+		FDeepLevelCityLayoutFragment& Fragment = Fragments.Emplace_GetRef();
+		if (!Provider->BuildCityLayoutFragment(Grid, Fragment, OutError))
 		{
-			FDeepLevelCityLayoutFragment& Fragment = Fragments.Emplace_GetRef();
-			if (!Cast<IDeepLevelCityDerivedLayoutProvider>(Actor)->BuildDerivedCityLayoutFragment(*this, Grid, *Base, Fragment, OutError))
-			{
-				return false;
-			}
+			return false;
 		}
 	}
 
@@ -163,23 +137,24 @@ bool ADeepLevelCityLayoutActor::RebuildSnapshot(TSet<FIntPoint>& OutDirtyChunks,
 	}
 	FDeepLevelCityLayoutBuilder::FindDirtyChunks(Snapshot.Get(), *NewSnapshot, OutDirtyChunks);
 	Snapshot = MoveTemp(NewSnapshot);
+	bSnapshotCurrent = true;
 	return true;
 }
 
 void ADeepLevelCityLayoutActor::RegenerateDecoration()
 {
-	DecorationComponent->RegenerateInEditor();
-}
-
-void ADeepLevelCityLayoutActor::NotifyBaseLayoutChanged()
-{
-	for (AActor* Actor : DerivedLayoutProviders)
+	FText Error;
+	TSet<FIntPoint> DirtyChunks;
+	if (!RefreshSnapshot(DirtyChunks, Error))
 	{
-		if (IDeepLevelCityDerivedLayoutProvider* Provider = Cast<IDeepLevelCityDerivedLayoutProvider>(Actor))
-		{
-			Provider->InvalidateDerivedLayout();
-		}
+		DecorationComponent->LastGenerationError = Error;
+#if WITH_EDITOR
+		FDeepLevelDesignPCGEditorEvents::OnGenerationFailed().Broadcast(
+			LOCTEXT("CityLayoutSystemName", "City Layout"), Error);
+#endif
+		return;
 	}
+	DecorationComponent->RegenerateInEditor();
 }
 
 bool UDeepLevelCityGridProfile::Validate(FText& OutError) const
@@ -203,17 +178,7 @@ bool FDeepLevelCityGrid::Validate(FText& OutError) const
 		OutError = LOCTEXT("InvalidCityChunk", "City Grid chunk size must be at least one cell.");
 		return false;
 	}
-	if (ExtentInCells.X < 1 || ExtentInCells.Y < 1)
-	{
-		OutError = LOCTEXT("InvalidCityExtent", "City Grid extents must be at least one cell.");
-		return false;
-	}
 	return true;
-}
-
-bool FDeepLevelCityGrid::ContainsCell(const FIntPoint& Cell) const
-{
-	return FMath::Abs(Cell.X) <= ExtentInCells.X && FMath::Abs(Cell.Y) <= ExtentInCells.Y;
 }
 
 FIntPoint FDeepLevelCityGrid::WorldToCell(const FVector& WorldPosition) const
@@ -283,11 +248,6 @@ bool FDeepLevelCityLayoutBuilder::Build(
 
 		for (const FDeepLevelCityCellState& Cell : Fragment.Cells)
 		{
-			if (!Grid.ContainsCell(Cell.Cell))
-			{
-				OutError = LOCTEXT("CellOutsideCityBounds", "City Layout fragment contains a cell outside the City Layout bounds.");
-				return false;
-			}
 			FDeepLevelCityCellState& Merged = Snapshot->Cells.FindOrAdd(Cell.Cell);
 			Merged.Cell = Cell.Cell;
 			Merged.OccupancyMask |= Cell.OccupancyMask;
@@ -302,11 +262,6 @@ bool FDeepLevelCityLayoutBuilder::Build(
 				|| Anchor.ClearanceDepth < 0.0 || !FMath::IsFinite(Anchor.ClearanceDepth))
 			{
 				OutError = LOCTEXT("InvalidCityAnchor", "City Layout contains an invalid, duplicate, or stale anchor.");
-				return false;
-			}
-			if (Anchor.OccupiedCells.ContainsByPredicate([&Grid](const FIntPoint& Cell) { return !Grid.ContainsCell(Cell); }))
-			{
-				OutError = LOCTEXT("AnchorOutsideCityBounds", "City Layout anchor references a cell outside the City Layout bounds.");
 				return false;
 			}
 			AnchorIds.Add(Anchor.StableId);

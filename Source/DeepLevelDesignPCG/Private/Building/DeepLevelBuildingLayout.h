@@ -15,10 +15,16 @@ struct FDeepLevelBuildingPreparedLayout
 
 namespace DeepLevelBuildingRoadside
 {
-	bool BuildPlan(const FDeepLevelCityLayoutSnapshot& Base, const UDeepLevelBuildingPlacementCatalog& Catalog,
-		const FGuid& BuildingSource, int32 Seed, double Variety, double CornerPreference,
-		EDeepLevelCornerPlacementFlags Corners, TConstArrayView<FBox2D> ExclusionBounds, FDeepLevelBuildingLinePlan& OutPlan,
-		int32& OutRejectedCount, FText& OutError);
+	struct FFrontageSpline
+	{
+		FGuid FrontageId;
+		TArray<FVector> Points;
+		bool bClosed = false;
+	};
+
+	bool BuildFrontageSplines(const FDeepLevelCityLayoutSnapshot& Base,
+		TArray<FFrontageSpline>& OutSplines, FText& OutError, double FrontageSetback = 0.0);
+
 }
 
 namespace DeepLevelBuildingLayoutGeometry

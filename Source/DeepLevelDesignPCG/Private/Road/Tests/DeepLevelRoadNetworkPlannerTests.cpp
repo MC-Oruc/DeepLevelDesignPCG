@@ -61,7 +61,6 @@ namespace DeepLevelRoadNetworkPlannerTests
 	UDeepLevelRoadTileCatalog* MakeCatalog()
 	{
 		UDeepLevelRoadTileCatalog* Catalog = NewObject<UDeepLevelRoadTileCatalog>();
-		Catalog->GridProfile = NewObject<UDeepLevelCityGridProfile>(Catalog);
 		Catalog->SidewalkWidthInTiles = 2;
 		Catalog->Tiles = {
 			MakeTile(TestPositiveX),
