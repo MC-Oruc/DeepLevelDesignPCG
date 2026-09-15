@@ -370,7 +370,9 @@ bool ADeepLevelPCGRoadsideBuildingActor::PrepareBuildingLayout(FText& OutError)
 		if (!FDeepLevelBuildingLinePlanner::BuildPlan(
 			*LoadedCatalog, Path, FrontageSeed, VarietyStrength, CornerPreference,
 			static_cast<EDeepLevelCornerPlacementFlags>(CornerPlacementMask), FrontagePlan, OutError,
-			true, true, Frontage->IsClosedLoop(),
+			true, true, Frontage->IsClosedLoop()
+				? EDeepLevelBuildingClearancePolicy::DecorativeBlock
+				: EDeepLevelBuildingClearancePolicy::Strict,
 			Frontage->IsClosedLoop() ? &CandidateResolver : nullptr))
 		{
 			return false;

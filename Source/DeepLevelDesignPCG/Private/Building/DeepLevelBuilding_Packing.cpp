@@ -298,11 +298,12 @@ namespace DeepLevelBuildingLinePacking
 			const double InitialCenter,
 			const double MaximumCenter,
 			const TArray<FClearanceShape>& ExistingShapes,
-			const bool bAllowInteriorFootprintOverlap,
+			const int32 CornerShapeCount,
+			const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			FResolvedElement& OutElement)
 		{
-			auto Evaluate = [&Path, &Catalog, &Element, &ExistingShapes, bAllowInteriorFootprintOverlap, CandidateResolver](const double Distance, FResolvedElement& Result)
+			auto Evaluate = [&Path, &Catalog, &Element, &ExistingShapes, CornerShapeCount, ClearancePolicy, CandidateResolver](const double Distance, FResolvedElement& Result)
 			{
 				if (!Path.Sample(Distance, Result.PathSample))
 				{
@@ -324,8 +325,22 @@ namespace DeepLevelBuildingLinePacking
 					Element.HalfWidth,
 					Element.HalfDepth,
 					Element.HalfHeight);
-				return !FClearance::IntersectsAny(
-					Result.Shape, ExistingShapes, bAllowInteriorFootprintOverlap);
+				for (int32 ShapeIndex = 0; ShapeIndex < ExistingShapes.Num(); ++ShapeIndex)
+				{
+					const bool bCorner = ShapeIndex < CornerShapeCount;
+					const bool bFacadesIntersect = FClearance::FacadesIntersect(Result.Shape.Facade, ExistingShapes[ShapeIndex].Facade);
+					const bool bFootprintsOverlap = FClearance::FootprintsOverlap(Result.Shape.Footprint, ExistingShapes[ShapeIndex].Footprint);
+					if ((ClearancePolicy == EDeepLevelBuildingClearancePolicy::Strict || bCorner)
+						&& (bFacadesIntersect || bFootprintsOverlap))
+					{
+						return false;
+					}
+					if (ClearancePolicy == EDeepLevelBuildingClearancePolicy::DecorativeBlock && !bCorner && bFacadesIntersect)
+					{
+						return false;
+					}
+				}
+				return true;
 			};
 
 			if (Evaluate(InitialCenter, OutElement))
@@ -371,7 +386,8 @@ namespace DeepLevelBuildingLinePacking
 			const TArray<FModuleVariant>& Variants,
 			const UDeepLevelBuildingPlacementCatalog& Catalog,
 			const TArray<FClearanceShape>& BaseShapes,
-			const bool bAllowInteriorFootprintOverlap,
+			const int32 CornerShapeCount,
+			const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			TArray<FResolvedElement>& OutElements,
 			TArray<FClearanceShape>& OutShapes)
@@ -400,15 +416,18 @@ namespace DeepLevelBuildingLinePacking
 						Cursor + Element.HalfWidth,
 						SpanEnd - Element.HalfWidth,
 						CandidateShapes,
-						bAllowInteriorFootprintOverlap,
+						CornerShapeCount,
+						ClearancePolicy,
 						CandidateResolver,
 						Resolved))
 					{
+						OutShapes = MoveTemp(CandidateShapes);
 						return false;
 					}
 					Cursor = Resolved.CoverageEnd + InteriorGap;
 					if (Cursor > SpanEnd + InteriorGap + UE_DOUBLE_KINDA_SMALL_NUMBER)
 					{
+						OutShapes = MoveTemp(CandidateShapes);
 						return false;
 					}
 					CandidateShapes.Add(Resolved.Shape);
@@ -432,9 +451,10 @@ namespace DeepLevelBuildingLinePacking
 		const double VarietyStrength,
 		const bool bHasBuildingAlternatives,
 		const bool bCloseLoop,
-		const bool bAllowInteriorFootprintOverlap,
+		const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 		const FSelectionHistory& InitialHistory,
+		const int32 CornerShapeCount,
 		TArray<FClearanceShape>& InOutShapes,
 		TArray<FResolvedElement>& OutElements,
 		FSelectionHistory& OutHistory)
@@ -503,6 +523,14 @@ namespace DeepLevelBuildingLinePacking
 			return SpanLength + UE_DOUBLE_KINDA_SMALL_NUMBER < MinimumModuleWidth;
 		}
 
+		struct FBestPrefix
+		{
+			TArray<FResolvedElement> Elements;
+			TArray<FClearanceShape> Shapes;
+			double UsedLength = 0.0;
+		};
+		FBestPrefix BestPrefix;
+
 		for (const int32 TerminalNode : TerminalNodes)
 		{
 			TArray<int32> Sequence;
@@ -518,7 +546,8 @@ namespace DeepLevelBuildingLinePacking
 				Variants,
 				Catalog,
 				InOutShapes,
-				bAllowInteriorFootprintOverlap,
+				CornerShapeCount,
+				ClearancePolicy,
 				CandidateResolver,
 				CandidateElements,
 				CandidateShapes))
@@ -528,7 +557,40 @@ namespace DeepLevelBuildingLinePacking
 				OutHistory = Nodes[TerminalNode].History;
 				return true;
 			}
+			else if (!CandidateElements.IsEmpty())
+			{
+				double PlacedLength = 0.0;
+				for (const FResolvedElement& Placed : CandidateElements)
+				{
+					PlacedLength += Placed.CoverageEnd - Placed.CoverageStart;
+				}
+				if (PlacedLength > BestPrefix.UsedLength)
+				{
+					BestPrefix.UsedLength = PlacedLength;
+					BestPrefix.Elements = MoveTemp(CandidateElements);
+					BestPrefix.Shapes = MoveTemp(CandidateShapes);
+				}
+			}
 		}
+
+		if (!BestPrefix.Elements.IsEmpty())
+		{
+			OutHistory = InitialHistory;
+			for (const FResolvedElement& Placed : BestPrefix.Elements)
+			{
+				if (!HasFirstDistance(OutHistory.FirstBuildingDistance[Placed.BuildingIndex]))
+				{
+					OutHistory.FirstBuildingDistance[Placed.BuildingIndex] = Placed.Distance;
+				}
+				OutHistory.LastBuildingDistance[Placed.BuildingIndex] = Placed.Distance;
+				OutHistory.LastBuildingFace[Placed.BuildingIndex] = Placed.Face;
+				OutHistory.HasBuildingFace[Placed.BuildingIndex] = true;
+			}
+			OutElements = MoveTemp(BestPrefix.Elements);
+			InOutShapes = MoveTemp(BestPrefix.Shapes);
+			return true;
+		}
+
 		return false;
 	}
 }

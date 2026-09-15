@@ -601,6 +601,12 @@ using FDeepLevelBuildingPlacementCandidateResolver = TFunction<bool(
 	EDeepLevelBuildingVolumeFace,
 	FDeepLevelBuildingLinePathSample&)>;
 
+enum class EDeepLevelBuildingClearancePolicy : uint8
+{
+	Strict,
+	DecorativeBlock
+};
+
 /** Internal deterministic optimizer for spline building packing. */
 class FDeepLevelBuildingLinePackingSolver
 {
@@ -616,7 +622,7 @@ public:
 		FText& OutError,
 		bool bAllowEmpty = false,
 		bool bSkipUnplaceableCorners = false,
-		bool bAllowInteriorFootprintOverlap = false,
+		EDeepLevelBuildingClearancePolicy ClearancePolicy = EDeepLevelBuildingClearancePolicy::Strict,
 		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver = nullptr);
 };
 
@@ -775,7 +781,7 @@ public:
 		FText& OutError,
 		bool bAllowEmpty = false,
 		bool bSkipUnplaceableCorners = false,
-		bool bAllowInteriorFootprintOverlap = false,
+		EDeepLevelBuildingClearancePolicy ClearancePolicy = EDeepLevelBuildingClearancePolicy::Strict,
 		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver = nullptr);
 };
 
@@ -797,11 +803,12 @@ namespace DeepLevelBuildingLinePacking
 			int32 Seed,
 			int32 SelectionIndex,
 			double VarietyStrength,
-		bool bHasBuildingAlternatives,
-		bool bCloseLoop,
-		bool bAllowInteriorFootprintOverlap,
-		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
-		const FSelectionHistory& InitialHistory,
+			bool bHasBuildingAlternatives,
+			bool bCloseLoop,
+			EDeepLevelBuildingClearancePolicy ClearancePolicy,
+			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
+			const FSelectionHistory& InitialHistory,
+			int32 CornerShapeCount,
 			TArray<FClearanceShape>& InOutShapes,
 			TArray<FResolvedElement>& OutElements,
 			FSelectionHistory& OutHistory);

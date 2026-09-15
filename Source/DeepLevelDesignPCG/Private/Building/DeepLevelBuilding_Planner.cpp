@@ -17,7 +17,7 @@ bool FDeepLevelBuildingLinePlanner::BuildPlan(
 	FText& OutError,
 	const bool bAllowEmpty,
 	const bool bSkipUnplaceableCorners,
-	const bool bAllowInteriorFootprintOverlap,
+	const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 	const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver)
 {
 	return FDeepLevelBuildingLinePackingSolver::Solve(
@@ -31,7 +31,7 @@ bool FDeepLevelBuildingLinePlanner::BuildPlan(
 		OutError,
 		bAllowEmpty,
 		bSkipUnplaceableCorners,
-		bAllowInteriorFootprintOverlap,
+		ClearancePolicy,
 		CandidateResolver);
 }
 
@@ -45,6 +45,14 @@ namespace DeepLevelBuildingLinePacking
 {
 	constexpr double CornerStartDegrees = 15.0;
 
+	enum class ECornerRejectionReason : uint8
+	{
+		None,
+		NoEligibleFace,
+		OutsideBlock,
+		InsufficientArea,
+		AllCandidatesRepeat
+	};
 	struct FCornerReservation
 	{
 		double CornerDistance = 0.0;
@@ -56,7 +64,8 @@ namespace DeepLevelBuildingLinePacking
 		const double CornerDistance,
 		FDeepLevelBuildingLinePathSample& OutSample,
 		FVector2D& OutIncoming,
-		FVector2D& OutOutgoing)
+		FVector2D& OutOutgoing,
+		FVector2D& OutBlockInward)
 	{
 		FDeepLevelBuildingLinePathSample CenterSample;
 		FDeepLevelBuildingLinePathSample BeforeSample;
@@ -77,6 +86,18 @@ namespace DeepLevelBuildingLinePacking
 		OutSample.Location = CenterSample.Location;
 		OutSample.Forward = FVector(OutIncoming.X, OutIncoming.Y, 0.0);
 		OutSample.Right = FVector(-OutIncoming.Y, OutIncoming.X, 0.0);
+
+		FVector2D Bisector = (OutIncoming + OutOutgoing).GetSafeNormal();
+		if (Bisector.IsNearlyZero())
+		{
+			Bisector = FVector2D(OutSample.Right);
+		}
+		const FVector2D SplineRight(OutSample.Right);
+		if (FVector2D::DotProduct(Bisector, SplineRight) < 0.0)
+		{
+			Bisector = -Bisector;
+		}
+		OutBlockInward = Bisector;
 		return true;
 	}
 
@@ -97,9 +118,10 @@ namespace DeepLevelBuildingLinePacking
 		const double CornerPreference,
 		const TSet<int32>& RecentCornerBuildings,
 		const TArray<FClearanceShape>& ExistingCornerShapes,
-		const bool bAllowInteriorFootprintOverlap,
+		const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
-		FCornerReservation& OutReservation)
+		FCornerReservation& OutReservation,
+		ECornerRejectionReason& OutRejectionReason)
 	{
 		struct FCandidate
 		{
@@ -111,12 +133,16 @@ namespace DeepLevelBuildingLinePacking
 		FDeepLevelBuildingLinePathSample CornerSample;
 		FVector2D Incoming;
 		FVector2D Outgoing;
-		if (!BuildCornerSample(Path, CornerDistance, CornerSample, Incoming, Outgoing))
+		FVector2D BlockInward;
+		if (!BuildCornerSample(Path, CornerDistance, CornerSample, Incoming, Outgoing, BlockInward))
 		{
 			return false;
 		}
 
 		TArray<FCandidate> Candidates;
+		int32 RejectedByExposure = 0;
+		int32 RejectedByBlock = 0;
+		int32 RejectedByArea = 0;
 		for (int32 BuildingIndex = 0; BuildingIndex < Catalog.Buildings.Num(); ++BuildingIndex)
 		{
 			const FDeepLevelBuildingPlacementDefinition& Definition = Catalog.Buildings[BuildingIndex];
@@ -131,15 +157,33 @@ namespace DeepLevelBuildingLinePacking
 				const bool bForwardEnd = FClearance::Cross2D(Incoming, Outgoing) >= 0.0;
 				if (!FCatalogModel::IsCornerFaceValid(Definition, Face, bForwardEnd))
 				{
+					++RejectedByExposure;
 					continue;
 				}
 				const FElementVariant Variant = FCatalogModel::MakeElementVariant(Definition, BuildingIndex, Face);
 				FDeepLevelBuildingLinePathSample AnchoredSample = CornerSample;
 				const double AnchorDirection = bForwardEnd ? -1.0 : 1.0;
 				AnchoredSample.Location += AnchoredSample.Forward * Variant.HalfWidth * AnchorDirection;
-				if (CandidateResolver && !(*CandidateResolver)(Definition, Face, AnchoredSample))
+				if (CandidateResolver)
 				{
-					continue;
+					bool bResolved = false;
+					const FVector TangentInward = CornerSample.Forward * AnchorDirection;
+					for (const double TangentShift : {0.0, 10.0, 25.0, 50.0, 100.0})
+					{
+						FDeepLevelBuildingLinePathSample TestSample = AnchoredSample;
+						TestSample.Location += TangentInward * TangentShift;
+						if ((*CandidateResolver)(Definition, Face, TestSample))
+						{
+							AnchoredSample = TestSample;
+							bResolved = true;
+							break;
+						}
+					}
+					if (!bResolved)
+					{
+						++RejectedByBlock;
+						continue;
+					}
 				}
 
 				FCandidate Candidate;
@@ -172,6 +216,7 @@ namespace DeepLevelBuildingLinePacking
 					|| Candidate.Element.CoverageEnd > RightLimit + UE_DOUBLE_KINDA_SMALL_NUMBER
 					|| FClearance::IntersectsAny(Candidate.Element.Shape, ExistingCornerShapes, false))
 				{
+					++RejectedByArea;
 					continue;
 				}
 
@@ -192,6 +237,18 @@ namespace DeepLevelBuildingLinePacking
 
 		if (Candidates.IsEmpty())
 		{
+			if (RejectedByBlock > 0 && RejectedByExposure == 0 && RejectedByArea == 0)
+			{
+				OutRejectionReason = ECornerRejectionReason::OutsideBlock;
+			}
+			else if (RejectedByArea > 0)
+			{
+				OutRejectionReason = ECornerRejectionReason::InsufficientArea;
+			}
+			else
+			{
+				OutRejectionReason = ECornerRejectionReason::NoEligibleFace;
+			}
 			return false;
 		}
 		const bool bHasFreshCandidate = VarietyStrength > UE_DOUBLE_KINDA_SMALL_NUMBER
@@ -234,8 +291,9 @@ namespace DeepLevelBuildingLinePacking
 	bool ValidateResolvedLayout(
 		const UDeepLevelBuildingPlacementCatalog& Catalog,
 		const TArray<FResolvedElement>& Elements,
-		const bool bAllowInteriorFootprintOverlap)
+		const EDeepLevelBuildingClearancePolicy ClearancePolicy)
 	{
+		const bool bDecorativeBlock = ClearancePolicy == EDeepLevelBuildingClearancePolicy::DecorativeBlock;
 		for (int32 AIndex = 0; AIndex < Elements.Num(); ++AIndex)
 		{
 			if (!Catalog.Buildings.IsValidIndex(Elements[AIndex].BuildingIndex)
@@ -248,11 +306,10 @@ namespace DeepLevelBuildingLinePacking
 			for (int32 BIndex = AIndex + 1; BIndex < Elements.Num(); ++BIndex)
 			{
 				const bool bCornerPair = Elements[AIndex].bCornerPlacement || Elements[BIndex].bCornerPlacement;
-				if ((!bAllowInteriorFootprintOverlap
-						&& (FClearance::FacadesIntersect(Elements[AIndex].Shape.Facade, Elements[BIndex].Shape.Facade)
-							|| FClearance::FootprintsOverlap(Elements[AIndex].Shape.Footprint, Elements[BIndex].Shape.Footprint)))
-					|| (bAllowInteriorFootprintOverlap && bCornerPair
-						&& FClearance::FacadesIntersect(Elements[AIndex].Shape.Facade, Elements[BIndex].Shape.Facade)))
+				const bool bFacadesIntersect = FClearance::FacadesIntersect(Elements[AIndex].Shape.Facade, Elements[BIndex].Shape.Facade);
+				const bool bFootprintsOverlap = FClearance::FootprintsOverlap(Elements[AIndex].Shape.Footprint, Elements[BIndex].Shape.Footprint);
+				if ((!bDecorativeBlock && (bFacadesIntersect || bFootprintsOverlap))
+					|| (bDecorativeBlock && bCornerPair && (bFacadesIntersect || bFootprintsOverlap)))
 				{
 					return false;
 				}
@@ -273,10 +330,11 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 	FText& OutError,
 	const bool bAllowEmpty,
 	const bool bSkipUnplaceableCorners,
-	const bool bAllowInteriorFootprintOverlap,
+	const EDeepLevelBuildingClearancePolicy ClearancePolicy,
 	const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver)
 {
 	using namespace DeepLevelBuildingLinePacking;
+	const bool bDecorativeBlock = ClearancePolicy == EDeepLevelBuildingClearancePolicy::DecorativeBlock;
 	OutPlan = {};
 	OutError = FText::GetEmpty();
 	if (Path.GetLength() <= UE_DOUBLE_SMALL_NUMBER)
@@ -311,7 +369,8 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 		FDeepLevelBuildingLinePathSample CornerSample;
 		FVector2D Incoming;
 		FVector2D Outgoing;
-		if (!BuildCornerSample(Path, CornerDistances[CornerIndex], CornerSample, Incoming, Outgoing))
+		FVector2D BlockInward;
+		if (!BuildCornerSample(Path, CornerDistances[CornerIndex], CornerSample, Incoming, Outgoing, BlockInward))
 		{
 			OutError = FText::Format(
 				LOCTEXT("CornerFrameFailure", "Building Line could not resolve spline corner {0}."),
@@ -348,6 +407,7 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 		{
 			RecentCornerBuildings.Add(FirstCornerBuilding.GetValue());
 		}
+		ECornerRejectionReason RejectionReason = ECornerRejectionReason::None;
 		FCornerReservation Reservation;
 		if (!BuildCornerReservation(
 			Catalog,
@@ -361,18 +421,29 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 			ClampedCornerPreference,
 			RecentCornerBuildings,
 			CornerShapes,
-			bAllowInteriorFootprintOverlap,
+			ClearancePolicy,
 			CandidateResolver,
-			Reservation))
+			Reservation,
+			RejectionReason))
 		{
 			if (bSkipUnplaceableCorners)
 			{
 				OutPlan.SkippedCornerIndices.Add(CornerIndex + 1);
 				continue;
 			}
+			const TCHAR* ReasonLabel = TEXT("unknown");
+			switch (RejectionReason)
+			{
+			case ECornerRejectionReason::NoEligibleFace: ReasonLabel = TEXT("no eligible exposure face"); break;
+			case ECornerRejectionReason::OutsideBlock: ReasonLabel = TEXT("footprint outside block boundary"); break;
+			case ECornerRejectionReason::InsufficientArea: ReasonLabel = TEXT("insufficient area between neighbors"); break;
+			case ECornerRejectionReason::AllCandidatesRepeat: ReasonLabel = TEXT("all candidates filtered by variety"); break;
+			default: break;
+			}
 			OutError = FText::Format(
-				LOCTEXT("CornerReservationFailure", "No calibrated building satisfies exposure and footprint constraints at spline corner {0}."),
-				FText::AsNumber(CornerIndex + 1));
+				LOCTEXT("CornerReservationFailure", "No calibrated building satisfies constraints at spline corner {0}: {1}."),
+				FText::AsNumber(CornerIndex + 1),
+				FText::FromStringView(ReasonLabel));
 			return false;
 		}
 		if (!FirstCornerBuilding.IsSet())
@@ -391,6 +462,7 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 	FSelectionHistory History = FCatalogModel::MakeHistory(Catalog.Buildings.Num(), ModuleCount);
 	TArray<FResolvedElement> ResolvedElements;
 	TArray<FClearanceShape> Shapes = CornerShapes;
+	const int32 CornerShapeCount = CornerShapes.Num();
 	int32 SelectionIndex = 0;
 	auto PackSpan = [
 		&Path,
@@ -401,11 +473,13 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 		ClampedVariety,
 		&SelectionIndex,
 		&History,
+		CornerShapeCount,
 		&Shapes,
 		&ResolvedElements,
 		&OutError,
 		bAllowEmpty,
-		bAllowInteriorFootprintOverlap,
+		bDecorativeBlock,
+		ClearancePolicy,
 		CandidateResolver](const double SpanStart, const double SpanEnd, const int32 ZoneIndex, const bool bCloseLoop)
 	{
 		TArray<FResolvedElement> SpanElements;
@@ -421,10 +495,11 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 			SelectionIndex,
 			ClampedVariety,
 			Catalog.Buildings.Num() > 1,
-			bCloseLoop && !bAllowInteriorFootprintOverlap,
-			bAllowInteriorFootprintOverlap,
+			bCloseLoop && !bDecorativeBlock,
+			ClearancePolicy,
 			CandidateResolver,
 			History,
+			CornerShapeCount,
 			Shapes,
 			SpanElements,
 			SpanHistory))
@@ -536,7 +611,7 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 		OutError = LOCTEXT("NoBuildingFits", "No calibrated building fits within the Building Line spline.");
 		return false;
 	}
-	if (!ValidateResolvedLayout(Catalog, ResolvedElements, bAllowInteriorFootprintOverlap))
+	if (!ValidateResolvedLayout(Catalog, ResolvedElements, ClearancePolicy))
 	{
 		OutError = LOCTEXT(
 			"LayoutValidationFailure",
