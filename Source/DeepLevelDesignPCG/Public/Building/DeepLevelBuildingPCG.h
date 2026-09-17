@@ -659,6 +659,7 @@ namespace DeepLevelBuildingLinePacking
 	{
 		FFacadeSegment Facade;
 		FFootprint Footprint;
+		int32 SpanIndex = INDEX_NONE;
 	};
 
 	struct FElementVariant
@@ -702,6 +703,7 @@ namespace DeepLevelBuildingLinePacking
 		FDeepLevelBuildingLinePathSample PathSample;
 		FClearanceShape Shape;
 		bool bCornerPlacement = false;
+		int32 SpanIndex = INDEX_NONE;
 	};
 }
 
@@ -809,6 +811,7 @@ namespace DeepLevelBuildingLinePacking
 			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			const FSelectionHistory& InitialHistory,
 			int32 CornerShapeCount,
+			int32 SpanIndex,
 			TArray<FClearanceShape>& InOutShapes,
 			TArray<FResolvedElement>& OutElements,
 			FSelectionHistory& OutHistory);

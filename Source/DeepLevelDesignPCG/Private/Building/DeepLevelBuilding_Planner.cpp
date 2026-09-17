@@ -308,10 +308,28 @@ namespace DeepLevelBuildingLinePacking
 				const bool bCornerPair = Elements[AIndex].bCornerPlacement || Elements[BIndex].bCornerPlacement;
 				const bool bFacadesIntersect = FClearance::FacadesIntersect(Elements[AIndex].Shape.Facade, Elements[BIndex].Shape.Facade);
 				const bool bFootprintsOverlap = FClearance::FootprintsOverlap(Elements[AIndex].Shape.Footprint, Elements[BIndex].Shape.Footprint);
-				if ((!bDecorativeBlock && (bFacadesIntersect || bFootprintsOverlap))
-					|| (bDecorativeBlock && bCornerPair && (bFacadesIntersect || bFootprintsOverlap)))
+				if (!bDecorativeBlock && (bFacadesIntersect || bFootprintsOverlap))
 				{
 					return false;
+				}
+				if (bDecorativeBlock)
+				{
+					if (bCornerPair && (bFacadesIntersect || bFootprintsOverlap))
+					{
+						return false;
+					}
+					if (!bCornerPair)
+					{
+						const bool bSameSpan = Elements[AIndex].SpanIndex != INDEX_NONE && Elements[AIndex].SpanIndex == Elements[BIndex].SpanIndex;
+						if (bFacadesIntersect)
+						{
+							return false;
+						}
+						if (!bSameSpan && bFootprintsOverlap)
+						{
+							return false;
+						}
+					}
 				}
 			}
 		}
@@ -500,6 +518,7 @@ bool FDeepLevelBuildingLinePackingSolver::Solve(
 			CandidateResolver,
 			History,
 			CornerShapeCount,
+			ZoneIndex,
 			Shapes,
 			SpanElements,
 			SpanHistory))

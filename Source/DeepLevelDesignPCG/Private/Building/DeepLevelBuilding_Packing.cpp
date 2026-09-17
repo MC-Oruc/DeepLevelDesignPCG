@@ -300,10 +300,11 @@ namespace DeepLevelBuildingLinePacking
 			const TArray<FClearanceShape>& ExistingShapes,
 			const int32 CornerShapeCount,
 			const EDeepLevelBuildingClearancePolicy ClearancePolicy,
+			const int32 CurrentSpanIndex,
 			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			FResolvedElement& OutElement)
 		{
-			auto Evaluate = [&Path, &Catalog, &Element, &ExistingShapes, CornerShapeCount, ClearancePolicy, CandidateResolver](const double Distance, FResolvedElement& Result)
+			auto Evaluate = [&Path, &Catalog, &Element, &ExistingShapes, CornerShapeCount, ClearancePolicy, CurrentSpanIndex, CandidateResolver](const double Distance, FResolvedElement& Result)
 			{
 				if (!Path.Sample(Distance, Result.PathSample))
 				{
@@ -325,6 +326,7 @@ namespace DeepLevelBuildingLinePacking
 					Element.HalfWidth,
 					Element.HalfDepth,
 					Element.HalfHeight);
+				Result.Shape.SpanIndex = CurrentSpanIndex;
 				for (int32 ShapeIndex = 0; ShapeIndex < ExistingShapes.Num(); ++ShapeIndex)
 				{
 					const bool bCorner = ShapeIndex < CornerShapeCount;
@@ -335,9 +337,17 @@ namespace DeepLevelBuildingLinePacking
 					{
 						return false;
 					}
-					if (ClearancePolicy == EDeepLevelBuildingClearancePolicy::DecorativeBlock && !bCorner && bFacadesIntersect)
+					if (ClearancePolicy == EDeepLevelBuildingClearancePolicy::DecorativeBlock && !bCorner)
 					{
-						return false;
+						const bool bSameSpan = CurrentSpanIndex != INDEX_NONE && ExistingShapes[ShapeIndex].SpanIndex == CurrentSpanIndex;
+						if (bFacadesIntersect)
+						{
+							return false;
+						}
+						if (!bSameSpan && bFootprintsOverlap)
+						{
+							return false;
+						}
 					}
 				}
 				return true;
@@ -388,6 +398,7 @@ namespace DeepLevelBuildingLinePacking
 			const TArray<FClearanceShape>& BaseShapes,
 			const int32 CornerShapeCount,
 			const EDeepLevelBuildingClearancePolicy ClearancePolicy,
+			const int32 SpanIndex,
 			const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 			TArray<FResolvedElement>& OutElements,
 			TArray<FClearanceShape>& OutShapes)
@@ -418,6 +429,7 @@ namespace DeepLevelBuildingLinePacking
 						CandidateShapes,
 						CornerShapeCount,
 						ClearancePolicy,
+						SpanIndex,
 						CandidateResolver,
 						Resolved))
 					{
@@ -430,6 +442,7 @@ namespace DeepLevelBuildingLinePacking
 						OutShapes = MoveTemp(CandidateShapes);
 						return false;
 					}
+					Resolved.SpanIndex = SpanIndex;
 					CandidateShapes.Add(Resolved.Shape);
 					OutElements.Add(MoveTemp(Resolved));
 				}
@@ -455,6 +468,7 @@ namespace DeepLevelBuildingLinePacking
 		const FDeepLevelBuildingPlacementCandidateResolver* CandidateResolver,
 		const FSelectionHistory& InitialHistory,
 		const int32 CornerShapeCount,
+		const int32 SpanIndex,
 		TArray<FClearanceShape>& InOutShapes,
 		TArray<FResolvedElement>& OutElements,
 		FSelectionHistory& OutHistory)
@@ -548,6 +562,7 @@ namespace DeepLevelBuildingLinePacking
 				InOutShapes,
 				CornerShapeCount,
 				ClearancePolicy,
+				SpanIndex,
 				CandidateResolver,
 				CandidateElements,
 				CandidateShapes))

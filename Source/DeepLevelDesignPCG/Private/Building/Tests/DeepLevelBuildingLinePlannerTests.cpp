@@ -1153,6 +1153,62 @@ bool FDeepLevelBuildingLineVisualScaleCooldownTest::RunTest(const FString& Param
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeepLevelBuildingLineNarrowBlockClearanceTest,
+	"DeepLevelDesignPCG.Editor.BuildingLine.NarrowBlockClearance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelBuildingLineNarrowBlockClearanceTest::RunTest(const FString& Parameters)
+{
+	UDeepLevelBuildingPlacementCatalog* Catalog = NewObject<UDeepLevelBuildingPlacementCatalog>();
+	FDeepLevelBuildingPlacementDefinition DeepBuilding = DeepLevelBuildingLinePlannerTests::MakeBuilding(AActor::StaticClass(), 1000.0);
+	DeepBuilding.PlacementVolume.Extent.Y = 750.0;
+	Catalog->Buildings.Add(DeepBuilding);
+
+	FDeepLevelBuildingLinePath Path;
+	TestTrue(TEXT("Narrow rectangular closed path builds"), DeepLevelBuildingLinePlannerTests::MakeClosedPath(
+		{
+			FSplinePoint(0, FVector::ZeroVector, ESplinePointType::Linear),
+			FSplinePoint(1, FVector(4000.0, 0.0, 0.0), ESplinePointType::Linear),
+			FSplinePoint(2, FVector(4000.0, 2500.0, 0.0), ESplinePointType::Linear),
+			FSplinePoint(3, FVector(0.0, 2500.0, 0.0), ESplinePointType::Linear)
+		},
+		Path));
+
+	FDeepLevelBuildingLinePlan Plan;
+	FText Error;
+	const bool bSolved = FDeepLevelBuildingLinePlanner::BuildPlan(
+		*Catalog,
+		Path,
+		1337,
+		1.0,
+		1.0,
+		EDeepLevelCornerPlacementFlags::None,
+		Plan,
+		Error,
+		true,
+		true,
+		EDeepLevelBuildingClearancePolicy::DecorativeBlock);
+
+	TestTrue(TEXT("Narrow block plan succeeds with DecorativeBlock and allow empty"), bSolved);
+	TestTrue(TEXT("Narrow block placed at least one building"), !Plan.Placements.IsEmpty());
+
+	for (int32 AIndex = 0; AIndex < Plan.Placements.Num(); ++AIndex)
+	{
+		const DeepLevelBuildingLinePlannerTests::FTestFootprint AFootprint =
+			DeepLevelBuildingLinePlannerTests::MakeFootprint(Plan.Placements[AIndex], DeepBuilding);
+		for (int32 BIndex = AIndex + 1; BIndex < Plan.Placements.Num(); ++BIndex)
+		{
+			const DeepLevelBuildingLinePlannerTests::FTestFootprint BFootprint =
+				DeepLevelBuildingLinePlannerTests::MakeFootprint(Plan.Placements[BIndex], DeepBuilding);
+			TestFalse(
+				TEXT("Opposite or cross-span building footprints do not penetrate each other in narrow block"),
+				DeepLevelBuildingLinePlannerTests::FootprintsOverlap(AFootprint, BFootprint));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDeepLevelBuildingLayoutFragmentTest,
 	"DeepLevelDesignPCG.Editor.BuildingLine.LayoutFragment",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
