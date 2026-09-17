@@ -86,6 +86,64 @@ namespace DeepLevelBuildingRoadside
 		}
 	}
 
+	bool HasRoadBehind(const FDeepLevelCityLayoutSnapshot& Base, const FIntPoint& Cell, const FIntPoint& Direction)
+	{
+		const int32 RoadMask = static_cast<int32>(EDeepLevelCityOccupancy::Road);
+		const int32 SidewalkMask = static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk);
+
+		FIntPoint ProbeCell = Cell - Direction;
+		const FDeepLevelCityCellState* Probe = Base.FindCell(ProbeCell);
+		while (Probe && (Probe->OccupancyMask & SidewalkMask))
+		{
+			ProbeCell -= Direction;
+			Probe = Base.FindCell(ProbeCell);
+		}
+		if (Probe && (Probe->OccupancyMask & RoadMask))
+		{
+			return true;
+		}
+
+		constexpr int32 MaxCornerSearchDepth = 4;
+		static const FIntPoint CardinalDirections[] = {
+			FIntPoint(1, 0), FIntPoint(-1, 0), FIntPoint(0, 1), FIntPoint(0, -1)};
+
+		for (int32 DeltaX = -MaxCornerSearchDepth; DeltaX <= MaxCornerSearchDepth; ++DeltaX)
+		{
+			for (int32 DeltaY = -MaxCornerSearchDepth; DeltaY <= MaxCornerSearchDepth; ++DeltaY)
+			{
+				if (FMath::Abs(DeltaX) + FMath::Abs(DeltaY) > MaxCornerSearchDepth) { continue; }
+				const FIntPoint RoadCandidate = Cell + FIntPoint(DeltaX, DeltaY);
+				const FDeepLevelCityCellState* RoadState = Base.FindCell(RoadCandidate);
+				if (!RoadState || !(RoadState->OccupancyMask & RoadMask)) { continue; }
+
+				bool bHasPosX = false, bHasNegX = false, bHasPosY = false, bHasNegY = false;
+				for (const FIntPoint& NbrDir : CardinalDirections)
+				{
+					const FDeepLevelCityCellState* Nbr = Base.FindCell(RoadCandidate + NbrDir);
+					if (Nbr && (Nbr->OccupancyMask & RoadMask))
+					{
+						if (NbrDir.X > 0) { bHasPosX = true; }
+						else if (NbrDir.X < 0) { bHasNegX = true; }
+						else if (NbrDir.Y > 0) { bHasPosY = true; }
+						else if (NbrDir.Y < 0) { bHasNegY = true; }
+					}
+				}
+				const bool bIsCorner = (bHasPosX != bHasNegX) && (bHasPosY != bHasNegY)
+					&& (bHasPosX || bHasNegX) && (bHasPosY || bHasNegY);
+				if (!bIsCorner) { continue; }
+
+				const int32 ExtX = bHasPosX ? -1 : 1;
+				const int32 ExtY = bHasPosY ? -1 : 1;
+				if ((Direction == FIntPoint(ExtX, 0) || Direction == FIntPoint(0, ExtY))
+					&& ((Cell.X - RoadCandidate.X) * ExtX >= 0) && ((Cell.Y - RoadCandidate.Y) * ExtY >= 0))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	bool BuildFrontageSplines(const FDeepLevelCityLayoutSnapshot& Base,
 		TArray<FFrontageSpline>& OutSplines, FText& OutError, const double FrontageSetback)
 	{
@@ -119,14 +177,7 @@ namespace DeepLevelBuildingRoadside
 				const FIntPoint OutsideCell = Pair.Key + Direction;
 				const FDeepLevelCityCellState* Outside = Base.FindCell(OutsideCell);
 				if (Outside && (Outside->OccupancyMask & (RoadMask | SidewalkMask))) { continue; }
-				FIntPoint ProbeCell = Pair.Key - Direction;
-				const FDeepLevelCityCellState* Probe = Base.FindCell(ProbeCell);
-				while (Probe && (Probe->OccupancyMask & SidewalkMask))
-				{
-					ProbeCell -= Direction;
-					Probe = Base.FindCell(ProbeCell);
-				}
-				if (!Probe || !(Probe->OccupancyMask & RoadMask)) { continue; }
+				if (!HasRoadBehind(Base, Pair.Key, Direction)) { continue; }
 
 				const FVector Right(Direction.X, Direction.Y, 0.0);
 				const FVector Tangent(Direction.Y, -Direction.X, 0.0);

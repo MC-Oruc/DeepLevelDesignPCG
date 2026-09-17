@@ -65,6 +65,48 @@ namespace DeepLevelBuildingRoadsideTests
 		return Road;
 	}
 
+	FDeepLevelCityLayoutFragment MakeCornerRoad()
+	{
+		FDeepLevelCityLayoutFragment Road;
+		Road.SourceGuid = FGuid(30, 31, 32, 33);
+		for (int32 X = 0; X <= 5; ++X)
+		{
+			Road.Cells.Add({FIntPoint(X, 0), static_cast<int32>(EDeepLevelCityOccupancy::Road), {}});
+		}
+		for (int32 Y = 1; Y <= 5; ++Y)
+		{
+			Road.Cells.Add({FIntPoint(5, Y), static_cast<int32>(EDeepLevelCityOccupancy::Road), {}});
+		}
+		for (int32 X = 0; X <= 7; ++X)
+		{
+			for (int32 Y = -2; Y <= -1; ++Y)
+			{
+				Road.Cells.Add({FIntPoint(X, Y), static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
+			}
+		}
+		for (int32 X = 6; X <= 7; ++X)
+		{
+			for (int32 Y = 0; Y <= 5; ++Y)
+			{
+				Road.Cells.Add({FIntPoint(X, Y), static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk), {}});
+			}
+		}
+		for (const FDeepLevelCityCellState& Cell : Road.Cells)
+		{
+			if (Cell.OccupancyMask & static_cast<int32>(EDeepLevelCityOccupancy::Sidewalk))
+			{
+				FDeepLevelCityAnchor& Surface = Road.Anchors.Emplace_GetRef();
+				Surface.StableId = FDeepLevelCityStableId::MakeAnchorId(
+					Road.SourceGuid, FString::Printf(TEXT("%d:%d"), Cell.Cell.X, Cell.Cell.Y), TEXT("SidewalkSurface"));
+				Surface.Geometry = EDeepLevelCityAnchorGeometry::Surface;
+				Surface.Transform = FTransform(FVector(Cell.Cell.X * 500.0, Cell.Cell.Y * 500.0, 0.0));
+				Surface.OccupiedCells.Add(Cell.Cell);
+				Surface.Tags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Surface);
+			}
+		}
+		return Road;
+	}
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelBuildingRoadsideSplineTest,
@@ -132,6 +174,23 @@ bool FDeepLevelBuildingRoadsideSplineTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("Block boundary is closed"), Splines[0].bClosed);
 		TestEqual(TEXT("Block boundary keeps four corners"), Splines[0].Points.Num(), 4);
+	}
+	const TArray<FDeepLevelCityLayoutFragment> CornerFragments = {MakeCornerRoad()};
+	if (!TestTrue(TEXT("Corner road snapshot builds"), FDeepLevelCityLayoutBuilder::Build(Grid, CornerFragments, Base, Error)))
+	{
+		AddError(Error.ToString());
+		return false;
+	}
+	Splines.Reset();
+	TestTrue(TEXT("Corner road produces frontage"), DeepLevelBuildingRoadside::BuildFrontageSplines(*Base, Splines, Error));
+	const DeepLevelBuildingRoadside::FFrontageSpline* CornerSpline = Splines.FindByPredicate([](const DeepLevelBuildingRoadside::FFrontageSpline& S)
+	{
+		return S.Points.ContainsByPredicate([](const FVector& Pt) { return Pt.X > 3000.0 && Pt.Y < -1000.0; });
+	});
+	TestNotNull(TEXT("Exterior corner spline turns the corner continuously"), CornerSpline);
+	if (CornerSpline)
+	{
+		TestEqual(TEXT("Exterior corner simplified to 3 points"), CornerSpline->Points.Num(), 3);
 	}
 	return true;
 }
