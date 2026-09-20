@@ -16,6 +16,7 @@ namespace DeepLevelCityTags
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Road_Surface, "City.Anchor.Road.Surface");
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Sidewalk_Surface, "City.Anchor.Sidewalk.Surface");
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Sidewalk_Edge, "City.Anchor.Sidewalk.Edge");
+	UE_DEFINE_GAMEPLAY_TAG(Anchor_Sidewalk_Infill, "City.Anchor.Sidewalk.Infill");
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Road_Junction, "City.Anchor.Road.Junction");
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Road_DeadEnd, "City.Anchor.Road.DeadEnd");
 	UE_DEFINE_GAMEPLAY_TAG(Anchor_Road_Local, "City.Anchor.Road.Local");

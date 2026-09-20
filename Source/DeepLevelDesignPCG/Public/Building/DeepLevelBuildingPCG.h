@@ -371,18 +371,25 @@ public:
 /** Building-domain authoring actor that derives and overrides frontage splines from City Layout road semantics. */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
 class DEEPLEVELDESIGNPCG_API ADeepLevelPCGRoadsideBuildingActor : public AActor,
-	public IDeepLevelBuildingPlacementSource
+	public IDeepLevelBuildingPlacementSource,
+	public IDeepLevelCityLayoutProvider
 {
 	GENERATED_BODY()
 
 public:
 	ADeepLevelPCGRoadsideBuildingActor();
+	virtual void PostLoad() override;
+	virtual void PostActorCreated() override;
+	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Roadside Building")
 	void GenerateFrontageSplines();
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Roadside Building")
 	void GenerateBuildings();
+
+	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|Roadside Building")
+	void AlignBuildingsVolFinal();
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
 	TObjectPtr<ADeepLevelCityLayoutActor> CityLayout;
@@ -440,6 +447,12 @@ public:
 	int32 RejectedPlacementCount = 0;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 FinalClosureMovedPlacementCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
+	int32 FinalClosurePhaseCount = 0;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building")
 	bool bOutputCurrent = false;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Roadside Building|Components")
@@ -464,6 +477,11 @@ public:
 	virtual const FText& GetBuildingGenerationError() const override { return LastGenerationError; }
 	virtual int32 GetBuildingRandomSeed() const override { return RandomSeed; }
 	virtual bool RequiresSingleBuildingSplineInput() const override { return false; }
+	virtual const ADeepLevelCityLayoutActor* GetCityLayoutOwner() const override { return CityLayout; }
+	virtual bool BuildCityLayoutFragment(
+		const FDeepLevelCityGrid& Grid,
+		FDeepLevelCityLayoutFragment& OutFragment,
+		FText& OutError) const override;
 
 protected:
 	virtual void PostRegisterAllComponents() override;
@@ -480,6 +498,15 @@ private:
 	void OnBuildingGenerationCompleted(UPCGComponent* Component);
 	void OnBuildingGenerationCancelled(UPCGComponent* Component);
 	void OnBuildingGenerationCleaned(UPCGComponent* Component);
+	void EnsureLayoutSourceGuid();
+	void SynchronizeCityLayoutRegistration();
+	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;
+
+	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Roadside Building")
+	FGuid LayoutSourceGuid;
+
+	UPROPERTY(VisibleAnywhere, Category = "Deep Level Design PCG|Roadside Building")
+	int32 LayoutRevision = 0;
 	TSharedPtr<const FDeepLevelBuildingPreparedLayout> PreparedLayout;
 	TSharedPtr<const FDeepLevelBuildingPreparedLayout> GeneratingLayout;
 };

@@ -690,4 +690,89 @@ bool FDeepLevelRoadNetworkPlanner::BuildPlan(
 	return ApplyCellOverrides(CellOverrides, Grid.Origin, Grid.TileSize, OutPlan, OutError);
 }
 
+bool FDeepLevelRoadNetworkPlanner::AppendSidewalkInfills(
+	const UDeepLevelRoadTileCatalog& Catalog,
+	const FDeepLevelCityGrid& Grid,
+	const TConstArrayView<FDeepLevelCityAnchor> Anchors,
+	const int32 Seed,
+	FDeepLevelRoadNetworkPlan& InOutPlan,
+	FText& OutError)
+{
+	OutError = FText::GetEmpty();
+	constexpr int32 SafetyWidthInTiles = 1;
+	TSet<FIntPoint> OccupiedCells;
+	for (const FDeepLevelRoadTilePlacement& Placement : InOutPlan.Placements)
+	{
+		OccupiedCells.Add(Placement.GridCell);
+	}
+	TMap<FIntPoint, FGuid> RequestedCells;
+	for (const FDeepLevelCityAnchor& Anchor : Anchors)
+	{
+		if (Anchor.Geometry != EDeepLevelCityAnchorGeometry::Surface
+			|| !Anchor.Tags.HasTagExact(DeepLevelCityTags::Anchor_Sidewalk_Infill))
+		{
+			continue;
+		}
+		if (!Anchor.Transform.IsValid() || Anchor.Extent.ContainsNaN()
+			|| Anchor.Extent.X <= UE_DOUBLE_SMALL_NUMBER || Anchor.Extent.Y <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			OutError = LOCTEXT("InvalidSidewalkInfill", "City Layout contains an invalid sidewalk infill surface.");
+			return false;
+		}
+
+		const FVector Center = Anchor.Transform.GetLocation();
+		const double SafetyDepth = Grid.TileSize * SafetyWidthInTiles;
+		const FVector2D Min(Center.X - Anchor.Extent.X - SafetyDepth, Center.Y - Anchor.Extent.Y - SafetyDepth);
+		const FVector2D Max(Center.X + Anchor.Extent.X + SafetyDepth, Center.Y + Anchor.Extent.Y + SafetyDepth);
+		const int32 MinX = FMath::FloorToInt((Min.X - Grid.Origin.X) / Grid.TileSize) - 1;
+		const int32 MaxX = FMath::CeilToInt((Max.X - Grid.Origin.X) / Grid.TileSize) + 1;
+		const int32 MinY = FMath::FloorToInt((Min.Y - Grid.Origin.Y) / Grid.TileSize) - 1;
+		const int32 MaxY = FMath::CeilToInt((Max.Y - Grid.Origin.Y) / Grid.TileSize) + 1;
+		const double HalfTile = Grid.TileSize * 0.5;
+		for (int32 X = MinX; X <= MaxX; ++X)
+		{
+			for (int32 Y = MinY; Y <= MaxY; ++Y)
+			{
+				const FIntPoint Cell(X, Y);
+				const FVector CellCenter = Grid.CellToWorld(Cell);
+				const bool bOverlaps = CellCenter.X + HalfTile > Min.X + UE_DOUBLE_KINDA_SMALL_NUMBER
+					&& CellCenter.X - HalfTile < Max.X - UE_DOUBLE_KINDA_SMALL_NUMBER
+					&& CellCenter.Y + HalfTile > Min.Y + UE_DOUBLE_KINDA_SMALL_NUMBER
+					&& CellCenter.Y - HalfTile < Max.Y - UE_DOUBLE_KINDA_SMALL_NUMBER;
+				if (bOverlaps && !OccupiedCells.Contains(Cell))
+				{
+					RequestedCells.FindOrAdd(Cell, Anchor.StableId);
+				}
+			}
+		}
+	}
+
+	TArray<FIntPoint> SortedCells;
+	RequestedCells.GetKeys(SortedCells);
+	SortCells(SortedCells);
+	for (const FIntPoint& Cell : SortedCells)
+	{
+		FCandidate Candidate;
+		if (!SelectCandidate(Catalog, EDeepLevelRoadTileKind::Sidewalk, 0, 0, Cell, Seed, Candidate))
+		{
+			OutError = LOCTEXT("MissingSidewalkInfillTile", "Road Network has no calibrated sidewalk tile for building infills.");
+			return false;
+		}
+		FDeepLevelRoadTilePlacement& Placement = InOutPlan.Placements.Emplace_GetRef();
+		Placement.StableId = FDeepLevelCityStableId::MakeAnchorId(
+			RequestedCells.FindChecked(Cell),
+			FString::Printf(TEXT("Cell:%d:%d"), Cell.X, Cell.Y),
+			TEXT("SidewalkInfillTile"));
+		Placement.TileMesh = Candidate.Definition->TileMesh;
+		Placement.TileMaterialOverride = Candidate.Definition->TileMaterialOverride;
+		Placement.Transform = MakeTransform(*Candidate.Definition, Cell, Grid.Origin, Grid.TileSize, Candidate.QuarterTurns);
+		Placement.SurfaceTransform = MakeSurfaceTransform(*Candidate.Definition, Placement.Transform);
+		Placement.GridCell = Cell;
+		Placement.Kind = EDeepLevelRoadTileKind::Sidewalk;
+		++InOutPlan.SidewalkInfillCount;
+		++InOutPlan.SidewalkCellCount;
+	}
+	return true;
+}
+
 #undef LOCTEXT_NAMESPACE

@@ -18,6 +18,7 @@ namespace DeepLevelCityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Road_Surface);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Sidewalk_Surface);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Sidewalk_Edge);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Sidewalk_Infill);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Road_Junction);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Road_DeadEnd);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Anchor_Road_Local);
@@ -97,6 +98,8 @@ public:
 	bool RefreshSnapshot(TSet<FIntPoint>& OutDirtyChunks, FText& OutError);
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> GetSnapshot() const { return bSnapshotCurrent ? Snapshot : nullptr; }
 	FSimpleMulticastDelegate OnGridOriginChanged;
+	FSimpleMulticastDelegate OnSidewalkInfillChanged;
+	void NotifySidewalkInfillChanged() { OnSidewalkInfillChanged.Broadcast(); }
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|City Decoration")
 	void RegenerateDecoration();

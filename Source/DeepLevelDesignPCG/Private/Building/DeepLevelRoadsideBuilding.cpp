@@ -1,6 +1,8 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Building/DeepLevelBuildingLayout.h"
+#include "Building/DeepLevelBuildingPlacementClosure.h"
+#include "Building/DeepLevelBuildingSidewalkInfill.h"
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
 #include "DeepLevelDesignPCGModule.h"
@@ -131,6 +133,54 @@ ADeepLevelPCGRoadsideBuildingActor::ADeepLevelPCGRoadsideBuildingActor()
 	}
 }
 
+void ADeepLevelPCGRoadsideBuildingActor::PostLoad()
+{
+	Super::PostLoad();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelPCGRoadsideBuildingActor::PostActorCreated()
+{
+	Super::PostActorCreated();
+	EnsureLayoutSourceGuid();
+}
+
+void ADeepLevelPCGRoadsideBuildingActor::PostDuplicate(const EDuplicateMode::Type DuplicateMode)
+{
+	Super::PostDuplicate(DuplicateMode);
+	LayoutSourceGuid = FGuid::NewGuid();
+	LayoutRevision = 0;
+}
+
+void ADeepLevelPCGRoadsideBuildingActor::EnsureLayoutSourceGuid()
+{
+	if (!LayoutSourceGuid.IsValid()) { LayoutSourceGuid = FGuid::NewGuid(); }
+}
+
+void ADeepLevelPCGRoadsideBuildingActor::SynchronizeCityLayoutRegistration()
+{
+	if (RegisteredCityLayout == CityLayout) { return; }
+	if (ADeepLevelCityLayoutActor* Previous = RegisteredCityLayout.Get())
+	{
+		Previous->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout = CityLayout;
+	if (CityLayout) { CityLayout->RegisterLayoutSource(*this); }
+}
+
+bool ADeepLevelPCGRoadsideBuildingActor::BuildCityLayoutFragment(
+	const FDeepLevelCityGrid& Grid,
+	FDeepLevelCityLayoutFragment& OutFragment,
+	FText& OutError) const
+{
+	(void)Grid;
+	OutError = FText::GetEmpty();
+	OutFragment = PreparedLayout ? PreparedLayout->Fragment : FDeepLevelCityLayoutFragment{};
+	OutFragment.SourceGuid = LayoutSourceGuid;
+	OutFragment.SourceRevision = LayoutRevision;
+	return true;
+}
+
 void ADeepLevelPCGRoadsideBuildingActor::GenerateFrontageSplines()
 {
 #if WITH_EDITOR
@@ -143,6 +193,9 @@ void ADeepLevelPCGRoadsideBuildingActor::GenerateFrontageSplines()
 		ReportRoadsideFailure(*this, LOCTEXT("MissingCityLayout", "Roadside Building requires a City Layout actor in an editor world."));
 		return;
 	}
+	++LayoutRevision;
+	SynchronizeCityLayoutRegistration();
+	CityLayout->InvalidateSnapshot();
 	TSet<FIntPoint> DirtyChunks;
 	FText SnapshotError;
 	if (!CityLayout->RefreshSnapshot(DirtyChunks, SnapshotError))
@@ -150,6 +203,7 @@ void ADeepLevelPCGRoadsideBuildingActor::GenerateFrontageSplines()
 		ReportRoadsideFailure(*this, SnapshotError);
 		return;
 	}
+	CityLayout->NotifySidewalkInfillChanged();
 	const TSharedPtr<const FDeepLevelCityLayoutSnapshot> Base = CityLayout->GetSnapshot();
 	if (!Base)
 	{
@@ -252,6 +306,8 @@ void ADeepLevelPCGRoadsideBuildingActor::GenerateFrontageSplines()
 void ADeepLevelPCGRoadsideBuildingActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
+	EnsureLayoutSourceGuid();
+	SynchronizeCityLayoutRegistration();
 #if WITH_EDITOR
 	if (IsTemplate()) { return; }
 	FrontageSplines.Reset();
@@ -287,6 +343,11 @@ void ADeepLevelPCGRoadsideBuildingActor::PostRegisterAllComponents()
 
 void ADeepLevelPCGRoadsideBuildingActor::PostUnregisterAllComponents()
 {
+	if (ADeepLevelCityLayoutActor* Registered = RegisteredCityLayout.Get())
+	{
+		Registered->UnregisterLayoutSource(*this);
+	}
+	RegisteredCityLayout.Reset();
 	if (PCGComponent)
 	{
 		PCGComponent->OnPCGGraphStartGeneratingDelegate.RemoveAll(this);
@@ -300,6 +361,8 @@ void ADeepLevelPCGRoadsideBuildingActor::PostUnregisterAllComponents()
 bool ADeepLevelPCGRoadsideBuildingActor::PrepareBuildingLayout(FText& OutError)
 {
 	OutError = FText::GetEmpty();
+	FinalClosureMovedPlacementCount = 0;
+	FinalClosurePhaseCount = 0;
 	if (!PCGComponent || PCGComponent->IsPartitioned())
 	{
 		OutError = LOCTEXT("PartitionedRoadsideBuilding", "Roadside Building requires one non-partitioned PCG component.");
@@ -452,6 +515,127 @@ void ADeepLevelPCGRoadsideBuildingActor::GenerateBuildings()
 #endif
 }
 
+void ADeepLevelPCGRoadsideBuildingActor::AlignBuildingsVolFinal()
+{
+#if WITH_EDITOR
+	if (!GetWorld() || GetWorld()->IsGameWorld() || !PCGComponent || PCGComponent->IsGenerating()) { return; }
+	if (!bOutputCurrent || !PreparedLayout)
+	{
+		ReportRoadsideFailure(*this,
+			LOCTEXT("FinalClosureRequiresGeneratedLayout", "Run Generate Buildings successfully before Align Buildings Vol Final."));
+		return;
+	}
+	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog || !LoadedCatalog->ValidateForGeneration(LastGenerationError))
+	{
+		if (!LoadedCatalog)
+		{
+			LastGenerationError = LOCTEXT("FinalClosureMissingCatalog", "Align Buildings Vol Final requires a calibrated Building Placement Catalog.");
+		}
+		ReportRoadsideFailure(*this, LastGenerationError);
+		return;
+	}
+
+	const FDeepLevelBuildingLinePlan BeforeAlignment = PreparedLayout->Plan;
+	TSharedRef<FDeepLevelBuildingPreparedLayout> Layout = MakeShared<FDeepLevelBuildingPreparedLayout>(*PreparedLayout);
+	FinalClosureMovedPlacementCount = 0;
+	FinalClosurePhaseCount = 0;
+	for (const UDeepLevelRoadsideFrontageSplineComponent* Frontage : FrontageSplines)
+	{
+		if (!Frontage || Frontage->bExcluded || !Frontage->IsClosedLoop()) { continue; }
+		FDeepLevelBuildingLinePlan FrontagePlan;
+		TArray<int32> LayoutIndices;
+		for (int32 Index = 0; Index < Layout->Plan.Placements.Num(); ++Index)
+		{
+			if (Layout->Plan.Placements[Index].FrontageId == Frontage->FrontageId)
+			{
+				LayoutIndices.Add(Index);
+				FrontagePlan.Placements.Add(Layout->Plan.Placements[Index]);
+			}
+		}
+		if (FrontagePlan.Placements.Num() < 2) { continue; }
+		TArray<FVector2D> BlockPolygon;
+		BlockPolygon.Reserve(Frontage->GetNumberOfSplinePoints());
+		for (int32 PointIndex = 0; PointIndex < Frontage->GetNumberOfSplinePoints(); ++PointIndex)
+		{
+			BlockPolygon.Add(FVector2D(Frontage->GetLocationAtSplinePoint(PointIndex, ESplineCoordinateSpace::World)));
+		}
+		FDeepLevelBuildingFinalClosureStats ClosureStats;
+		if (!FDeepLevelBuildingPlacementClosure::ApplyFinal(
+			*LoadedCatalog, BlockPolygon, BlockBoundaryMargin, FrontagePlan, ClosureStats, LastGenerationError))
+		{
+			ReportRoadsideFailure(*this, LastGenerationError);
+			return;
+		}
+		for (int32 Index = 0; Index < LayoutIndices.Num(); ++Index)
+		{
+			Layout->Plan.Placements[LayoutIndices[Index]] = MoveTemp(FrontagePlan.Placements[Index]);
+		}
+		FinalClosureMovedPlacementCount += ClosureStats.MovedPlacementCount;
+		FinalClosurePhaseCount = FMath::Max(FinalClosurePhaseCount, ClosureStats.PhaseCount);
+	}
+
+	if (FinalClosureMovedPlacementCount == 0)
+	{
+		LastGenerationError = LOCTEXT("FinalClosureNoMovement", "Align Buildings Vol Final found no safe placement movement.");
+		FDeepLevelDesignPCGEditorEvents::OnGenerationWarning().Broadcast(
+			LOCTEXT("RoadsideBuildingWarningSystem", "Roadside Building"), LastGenerationError);
+		RedrawRoadsideEditorViewports();
+		return;
+	}
+
+	Layout->Transforms.Reset(Layout->Plan.Placements.Num());
+	for (const FDeepLevelBuildingLinePlacement& Placement : Layout->Plan.Placements)
+	{
+		const FDeepLevelBuildingPlacementDefinition* Definition = LoadedCatalog->Buildings.FindByPredicate(
+			[&Placement](const FDeepLevelBuildingPlacementDefinition& Entry)
+			{
+				return Entry.BuildingClass == Placement.BuildingClass;
+			});
+		if (!Definition)
+		{
+			ReportRoadsideFailure(*this, LOCTEXT("FinalClosureMissingDefinition", "Vol.Final lost a building placement definition."));
+			return;
+		}
+		Layout->Transforms.Add(FDeepLevelBuildingPlacementGeometry::BuildActorTransform(
+			*Definition, Placement.StreetFace, Placement.PathSample.Location,
+			Placement.PathSample.Forward, Placement.PathSample.Right));
+	}
+	Layout->InputKey = HashCombineFast(Layout->InputKey, GetTypeHash(FName(TEXT("Vol.Final"))));
+	FDeepLevelCityGrid Grid;
+	if (!CityLayout || !CityLayout->ResolveGrid(Grid, LastGenerationError))
+	{
+		ReportRoadsideFailure(*this, LastGenerationError);
+		return;
+	}
+	++LayoutRevision;
+	Layout->Fragment = {};
+	Layout->Fragment.SourceGuid = LayoutSourceGuid;
+	Layout->Fragment.SourceRevision = LayoutRevision;
+	if (!DeepLevelBuildingSidewalkInfill::BuildAnchors(
+		*LoadedCatalog, Grid, LayoutSourceGuid, LayoutRevision,
+		BeforeAlignment, Layout->Plan, Layout->Fragment.Anchors, LastGenerationError))
+	{
+		ReportRoadsideFailure(*this, LastGenerationError);
+		return;
+	}
+	PreparedLayout = Layout;
+	LastGenerationError = FText::GetEmpty();
+	SynchronizeCityLayoutRegistration();
+	TSet<FIntPoint> DirtyChunks;
+	FText SnapshotError;
+	CityLayout->InvalidateSnapshot();
+	if (!CityLayout->RefreshSnapshot(DirtyChunks, SnapshotError))
+	{
+		ReportRoadsideFailure(*this, SnapshotError);
+		return;
+	}
+	CityLayout->NotifySidewalkInfillChanged();
+	Modify();
+	PCGComponent->GenerateLocal(true);
+#endif
+}
+
 void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationStarted(UPCGComponent* Component)
 {
 	GeneratingLayout = PreparedLayout;
@@ -542,6 +726,8 @@ void ADeepLevelPCGRoadsideBuildingActor::PostEditChangeProperty(FPropertyChanged
 {
 	PreparedLayout.Reset();
 	bOutputCurrent = false;
+	SynchronizeCityLayoutRegistration();
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 #endif

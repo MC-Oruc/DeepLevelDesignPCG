@@ -151,6 +151,7 @@ private:
 	void EnsureLayoutSourceGuid();
 	void SynchronizeCityLayoutRegistration();
 	void SynchronizeTransformToCityLayout();
+	void RegenerateSidewalkInfills();
 	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;
 	void OrganizeGeneratedRoadMeshes(UPCGComponent* GeneratedComponent);
 
@@ -365,6 +366,7 @@ class UPCGSplineData;
 
 struct FDeepLevelRoadTilePlacement
 {
+	FGuid StableId;
 	TSoftObjectPtr<UStaticMesh> TileMesh;
 	TSoftObjectPtr<UMaterialInterface> TileMaterialOverride;
 	FTransform Transform = FTransform::Identity;
@@ -381,6 +383,7 @@ struct FDeepLevelRoadNetworkPlan
 	TArray<FDeepLevelRoadTilePlacement> Placements;
 	int32 RoadCellCount = 0;
 	int32 SidewalkCellCount = 0;
+	int32 SidewalkInfillCount = 0;
 };
 
 /** Deterministic 1x1 grid planner shared by the road PCG element and tests. */
@@ -395,4 +398,11 @@ public:
 		FDeepLevelRoadNetworkPlan& OutPlan,
 		FText& OutError,
 		TConstArrayView<FDeepLevelRoadCellOverride> CellOverrides = {});
+	static bool AppendSidewalkInfills(
+		const UDeepLevelRoadTileCatalog& Catalog,
+		const FDeepLevelCityGrid& Grid,
+		TConstArrayView<FDeepLevelCityAnchor> Anchors,
+		int32 Seed,
+		FDeepLevelRoadNetworkPlan& InOutPlan,
+		FText& OutError);
 };

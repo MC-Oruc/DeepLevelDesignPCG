@@ -173,6 +173,7 @@ void ADeepLevelRoadNetworkActor::PostUnregisterAllComponents()
 	if (ADeepLevelCityLayoutActor* Registered = RegisteredCityLayout.Get())
 	{
 		Registered->OnGridOriginChanged.RemoveAll(this);
+		Registered->OnSidewalkInfillChanged.RemoveAll(this);
 		Registered->UnregisterLayoutSource(*this);
 	}
 	RegisteredCityLayout.Reset();
@@ -185,6 +186,7 @@ void ADeepLevelRoadNetworkActor::SynchronizeCityLayoutRegistration()
 	if (ADeepLevelCityLayoutActor* Previous = RegisteredCityLayout.Get())
 	{
 		Previous->OnGridOriginChanged.RemoveAll(this);
+		Previous->OnSidewalkInfillChanged.RemoveAll(this);
 		Previous->UnregisterLayoutSource(*this);
 	}
 	RegisteredCityLayout = CityLayout;
@@ -192,8 +194,18 @@ void ADeepLevelRoadNetworkActor::SynchronizeCityLayoutRegistration()
 	{
 		CityLayout->RegisterLayoutSource(*this);
 		CityLayout->OnGridOriginChanged.AddUObject(this, &ThisClass::SynchronizeTransformToCityLayout);
+		CityLayout->OnSidewalkInfillChanged.AddUObject(this, &ThisClass::RegenerateSidewalkInfills);
 		SynchronizeTransformToCityLayout();
 	}
+}
+
+void ADeepLevelRoadNetworkActor::RegenerateSidewalkInfills()
+{
+#if WITH_EDITOR
+	if (!GetWorld() || GetWorld()->IsGameWorld() || !PCGComponent
+		|| PCGComponent->IsGenerating() || !PCGComponent->GetGraph()) { return; }
+	PCGComponent->GenerateLocal(true);
+#endif
 }
 
 void ADeepLevelRoadNetworkActor::SynchronizeTransformToCityLayout()
@@ -685,7 +697,6 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 			Context);
 		return true;
 	}
-
 	UDeepLevelRoadTileCatalog* Catalog = Network->Catalog.LoadSynchronous();
 	if (!Catalog)
 	{
@@ -730,6 +741,17 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 		return true;
 	}
 
+	if (Network->CityLayout)
+	{
+		const TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot = Network->CityLayout->GetSnapshot();
+		if (Snapshot && !FDeepLevelRoadNetworkPlanner::AppendSidewalkInfills(
+			*Catalog, Grid, Snapshot->GetAnchors(), Settings->RandomSeed, Plan, Error))
+		{
+			ReportGenerationError(Error, Context);
+			return true;
+		}
+	}
+
 	UPCGPointData* OutputData = FPCGContext::NewObject_AnyThread<UPCGPointData>(Context);
 	OutputData->InitializeFromData(Splines[0]);
 	UPCGMetadata* Metadata = OutputData->MutableMetadata();
@@ -754,7 +776,9 @@ bool DeepLevelRoadNetworkPCG::FElement::ExecuteInternal(FPCGContext* Context) co
 		FPCGPoint& Point = Points.Emplace_GetRef();
 		Point.Transform = Placement.Transform;
 		Point.Density = 1.0f;
-		Point.Seed = HashCombineFast(Settings->RandomSeed, HashCombineFast(GetTypeHash(Placement.GridCell.X), GetTypeHash(Placement.GridCell.Y)));
+		Point.Seed = Placement.StableId.IsValid()
+			? HashCombineFast(Settings->RandomSeed, GetTypeHash(Placement.StableId))
+			: HashCombineFast(Settings->RandomSeed, HashCombineFast(GetTypeHash(Placement.GridCell.X), GetTypeHash(Placement.GridCell.Y)));
 		Point.MetadataEntry = Metadata->AddEntry();
 		MeshAttribute->SetValue(Point.MetadataEntry, Placement.TileMesh.ToSoftObjectPath());
 		MaterialOverrideAttribute->SetValue(Point.MetadataEntry, Placement.TileMaterialOverride.ToSoftObjectPath());

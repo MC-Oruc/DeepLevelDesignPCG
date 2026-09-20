@@ -18,5 +18,7 @@ public class DeepLevelDesignPCG : ModuleRules
                 "GameplayTags",
                 "PCG",
             });
+
+        PrivateDependencyModuleNames.AddRange(new[] { "Json" });
     }
 }
