@@ -9,6 +9,7 @@
 #include "CanvasItem.h"
 #include "CanvasTypes.h"
 #include "ContentBrowserModule.h"
+#include "IContentBrowserSingleton.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Framework/Application/SlateApplication.h"

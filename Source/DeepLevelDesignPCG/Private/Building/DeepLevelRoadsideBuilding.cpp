@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "PackedLevelActor/PackedLevelActor.h"
 #include "PCGComponent.h"
+#include "PCGGraph.h"
 #include "PCGManagedResource.h"
 #include "Data/PCGSplineData.h"
 #include "UObject/ConstructorHelpers.h"
