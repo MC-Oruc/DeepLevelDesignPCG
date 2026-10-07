@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Building/DeepLevelBuildingEditor.h"
+#include "Building/DeepLevelBuildingCatalogAuthoring.h"
 #include "SceneView.h"
 
 // ---- DeepLevelBuildingCatalogPreviewViewport ----
@@ -391,34 +392,7 @@ void SDeepLevelBuildingCatalogPreviewViewport::PreviewPreset(const UDeepLevelBui
 
 bool SDeepLevelBuildingCatalogPreviewViewport::AutoFitVolume(UClass* BuildingClass, const FRotator& VolumeRotation, FVector& OutCenter, FVector& OutExtent)
 {
-	if (!PreviewScene.IsValid()) return false;
-	ClearPreview();
-	AActor* Actor = SpawnBuilding(BuildingClass, FTransform::Identity);
-	if (!Actor) return false;
-	FBox LocalBox(EForceInit::ForceInit);
-	const FQuat InverseRotation = VolumeRotation.Quaternion().Inverse();
-	TInlineComponentArray<UPrimitiveComponent*> Components(Actor);
-	for (const UPrimitiveComponent* Component : Components)
-	{
-		if (!Component || !Component->IsRegistered()) continue;
-		const FBox ComponentBox = Component->Bounds.GetBox();
-		for (int32 Corner = 0; Corner < 8; ++Corner)
-		{
-			const FVector Point(
-				(Corner & 1) ? ComponentBox.Max.X : ComponentBox.Min.X,
-				(Corner & 2) ? ComponentBox.Max.Y : ComponentBox.Min.Y,
-				(Corner & 4) ? ComponentBox.Max.Z : ComponentBox.Min.Z);
-			LocalBox += InverseRotation.RotateVector(Point);
-		}
-	}
-	const bool bValid = LocalBox.IsValid != 0;
-	if (bValid)
-	{
-		OutCenter = VolumeRotation.Quaternion().RotateVector(LocalBox.GetCenter());
-		OutExtent = LocalBox.GetExtent().ComponentMax(FVector(1.0));
-	}
-	ClearPreview();
-	return bValid;
+	return DeepLevelBuildingCatalogAuthoring::AutoFit(BuildingClass, VolumeRotation, OutCenter, OutExtent);
 }
 
 FVector SDeepLevelBuildingCatalogPreviewViewport::GetPrimaryLocation() const

@@ -775,6 +775,23 @@ void ADeepLevelPCGRoadsideBuildingActor::ToggleFrontageExclusion(
 void ADeepLevelPCGRoadsideBuildingActor::CreateFrontageOverride(
 	const UDeepLevelRoadsideFrontageSplineComponent& Source, const bool bReplace)
 {
+	TArray<FVector> Points;
+	for (int32 Index = 0; Index < Source.GetNumberOfSplinePoints(); ++Index)
+	{ Points.Add(Source.GetLocationAtSplinePoint(Index, ESplineCoordinateSpace::World)); }
+	if (auto* Override = CreateManualFrontage(Points, Source.IsClosedLoop(), bReplace ? Source.FrontageId : FGuid(), false))
+	{
+		Override->SetWorldTransform(Source.GetComponentTransform());
+		Override->SplineCurves = Source.SplineCurves;
+		Override->UpdateSpline();
+		GenerateFrontageSplines();
+	}
+}
+
+UDeepLevelRoadsideFrontageSplineComponent* ADeepLevelPCGRoadsideBuildingActor::CreateManualFrontage(
+	const TArray<FVector>& WorldPoints, const bool bClosed, const FGuid& ReplacedId, const bool bRefresh)
+{
+	if (WorldPoints.Num() < (bClosed ? 3 : 2)) { return nullptr; }
+	const bool bReplace = ReplacedId.IsValid();
 	Modify();
 	UDeepLevelRoadsideFrontageSplineComponent* Override = CreateFrontageComponent(
 		MakeUniqueObjectName(this, UDeepLevelRoadsideFrontageSplineComponent::StaticClass(),
@@ -783,24 +800,28 @@ void ADeepLevelPCGRoadsideBuildingActor::CreateFrontageOverride(
 		bReplace ? EDeepLevelRoadsideFrontageKind::Replace : EDeepLevelRoadsideFrontageKind::Add);
 	Override->Modify();
 	Override->FrontageId = FGuid::NewGuid();
-	Override->ReplacedFrontageId = bReplace ? Source.FrontageId : FGuid();
-	Override->SplineCurves = Source.SplineCurves;
-	Override->SetClosedLoop(Source.IsClosedLoop(), false);
+	Override->ReplacedFrontageId = ReplacedId;
+	Override->ClearSplinePoints(false);
+	for (const FVector& Point : WorldPoints) { Override->AddSplinePoint(Point, ESplineCoordinateSpace::World, false); }
+	for (int32 Index = 0; Index < WorldPoints.Num(); ++Index) { Override->SetSplinePointType(Index, ESplinePointType::Linear, false); }
+	Override->SetClosedLoop(bClosed, false);
 	Override->SetUnselectedSplineSegmentColor(FLinearColor(0.0f, 0.8f, 1.0f));
 	Override->UpdateSpline();
+	Override->bSplineHasBeenEdited = true;
 	MarkPackageDirty();
-	GenerateFrontageSplines();
+	if (bRefresh) { GenerateFrontageSplines(); }
+	return Override;
 }
 
 void ADeepLevelPCGRoadsideBuildingActor::RemoveFrontageOverride(
-	UDeepLevelRoadsideFrontageSplineComponent& Frontage)
+	UDeepLevelRoadsideFrontageSplineComponent& Frontage, const bool bRefresh)
 {
 	if (Frontage.Kind == EDeepLevelRoadsideFrontageKind::Automatic) { return; }
 	Modify();
 	RemoveInstanceComponent(&Frontage);
 	Frontage.DestroyComponent();
 	MarkPackageDirty();
-	GenerateFrontageSplines();
+	if (bRefresh) { GenerateFrontageSplines(); }
 }
 #endif
 

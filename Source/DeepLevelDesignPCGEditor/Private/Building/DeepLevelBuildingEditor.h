@@ -186,6 +186,7 @@ private:
 	FText GetPresetSummary() const;
 	FText GetValidationText() const;
 	void RefreshValidation();
+	void HandleCatalogChanged(UObject* Object, FPropertyChangedEvent& Event);
 	void ModifyCatalog(const FText& TransactionText, TFunctionRef<void()> Mutation);
 	void RefreshPreview();
 	void OnBuildingSelectionChanged(TSharedPtr<int32> Item, ESelectInfo::Type SelectInfo);

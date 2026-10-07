@@ -2,6 +2,7 @@
 
 #include "AssetToolsModule.h"
 #include "Automation/MCP/DeepLevelPCGToolset.h"
+#include "Automation/DeepLevelPCGGeneration.h"
 #include "ToolsetRegistry/UToolsetRegistry.h"
 #include "ComponentVisualizers.h"
 #include "DeepLevelDesignPCGModule.h"
@@ -76,6 +77,7 @@ public:
 
 	virtual void ShutdownModule() override
 	{
+		DeepLevelPCGGeneration::Shutdown();
 		UToolsetRegistry::UnregisterToolsetClass(UDeepLevelPCGToolset::StaticClass());
 		if (IsRunningCommandlet())
 		{

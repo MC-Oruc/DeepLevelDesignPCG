@@ -2,6 +2,7 @@
 #pragma once
 #include "ToolsetRegistry/ToolsetDefinition.h"
 #include "ToolsetRegistry/ToolsetImage.h"
+#include "ToolsetRegistry/ToolCallAsyncResult.h"
 #include "DeepLevelPCGToolset.generated.h"
 
 USTRUCT()
@@ -16,6 +17,16 @@ struct FDeepLevelPCGToolResult
 	FToolsetImage Image;
 };
 
+UCLASS()
+class UDeepLevelPCGToolCall : public UToolCallAsyncResult
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY()
+	FDeepLevelPCGToolResult Value;
+	void Complete(FDeepLevelPCGToolResult&& Result) { MaybeBroadcastSuccessfulCompletion(MoveTemp(Result), Value); }
+};
+
 /** Batched DeepLevelDesignPCG authoring DSL. Describe once; Execute edits, validates and optionally captures in one call. */
 UCLASS()
 class UDeepLevelPCGToolset : public UToolsetDefinition
@@ -25,7 +36,7 @@ public:
 	/** Returns the versioned DSL contract, supported operations and examples. */
 	UFUNCTION(meta = (AICallable))
 	static FString Describe();
-	/** Executes a JSON DSL request. capture=true returns the updated decoration preview in this same response. */
+	/** Executes a JSON DSL batch, waits for requested PCG generation, and optionally returns a fresh image. */
 	UFUNCTION(meta = (AICallable))
-	static FDeepLevelPCGToolResult Execute(const FString& Request);
+	static UDeepLevelPCGToolCall* Execute(const FString& Request);
 };

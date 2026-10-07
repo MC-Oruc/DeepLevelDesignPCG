@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Building/DeepLevelBuildingEditor.h"
+#include "Building/DeepLevelBuildingCatalogAuthoring.h"
 #include "Widgets/Layout/SSpacer.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelBuildingEditor)
@@ -61,6 +62,7 @@ const FName FDeepLevelBuildingCatalogEditorToolkit::WorkspaceTabId(TEXT("DeepLev
 
 FDeepLevelBuildingCatalogEditorToolkit::~FDeepLevelBuildingCatalogEditorToolkit()
 {
+	FCoreUObjectDelegates::OnObjectPropertyChanged.RemoveAll(this);
 	FaceDragTransaction.Reset();
 	BuildingPreviewViewport.Reset();
 	PresetPreviewViewport.Reset();
@@ -80,6 +82,7 @@ void FDeepLevelBuildingCatalogEditorToolkit::InitEditor(EToolkitMode::Type Mode,
 {
 	Catalog = InCatalog;
 	if (!Catalog) return;
+	FCoreUObjectDelegates::OnObjectPropertyChanged.AddSP(this, &FDeepLevelBuildingCatalogEditorToolkit::HandleCatalogChanged);
 	BuildingProxy = NewObject<UDeepLevelBuildingCalibrationProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	PresetProxy = NewObject<UDeepLevelBuildingPresetProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 
@@ -379,11 +382,7 @@ void FDeepLevelBuildingCatalogEditorToolkit::CommitPresetProxy(const FPropertyCh
 void FDeepLevelBuildingCatalogEditorToolkit::ModifyCatalog(const FText& Text, TFunctionRef<void()> Mutation)
 {
 	if (!Catalog) return;
-	FScopedTransaction Transaction(Text);
-	Catalog->Modify();
-	Mutation();
-	Catalog->PostEditChange();
-	Catalog->MarkPackageDirty();
+	DeepLevelBuildingCatalogAuthoring::Edit(*Catalog, Text, Mutation);
 	RefreshValidation();
 }
 
@@ -700,3 +699,12 @@ void FDeepLevelBuildingCatalogEditorToolkit::EndPreviewFaceDrag()
 }
 
 #undef LOCTEXT_NAMESPACE
+
+void FDeepLevelBuildingCatalogEditorToolkit::HandleCatalogChanged(UObject* Object, FPropertyChangedEvent& Event)
+{
+ if (Object != Catalog) { return; }
+ RefreshLists();
+ SelectedBuilding = Catalog->Buildings.IsEmpty() ? INDEX_NONE : FMath::Clamp(SelectedBuilding, 0, Catalog->Buildings.Num()-1);
+ SelectedPreset = Catalog->Presets.IsEmpty() ? INDEX_NONE : FMath::Clamp(SelectedPreset, 0, Catalog->Presets.Num()-1);
+ LoadBuildingProxy(); LoadPresetProxy(); RefreshValidation(); RefreshPreview();
+}

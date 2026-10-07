@@ -141,8 +141,10 @@ bool FDeepLevelPCGDSLCaptureTest::RunTest(const FString&)
 {
 	FFixture F;
 	const FString Operations = TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[0,0,100]}])JSON");
-	const auto Output = UDeepLevelPCGToolset::Execute(F.Request(Operations,
+	const auto* Call = UDeepLevelPCGToolset::Execute(F.Request(Operations,
 		TEXT(R"JSON(,"variant":"$v","dryRun":true,"capture":true,"captureSize":[256,256],"camera":{"location":[400,400,300],"rotation":[-20,-135,0]})JSON")));
+	if (!TestTrue(TEXT("Decoration async result completes immediately"), Call->bIsComplete)) { return false; }
+	const auto& Output = Call->Value;
 	TSharedPtr<FJsonObject> Report;
 	if (!TestTrue(TEXT("Capture report is JSON"), FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Output.Report), Report))) { return false; }
 	TestTrue(TEXT("Capture request retains successful staging status"), Output.Success);

@@ -470,7 +470,9 @@ public:
 #if WITH_EDITOR
 	void ToggleFrontageExclusion(const UDeepLevelRoadsideFrontageSplineComponent& Frontage);
 	void CreateFrontageOverride(const UDeepLevelRoadsideFrontageSplineComponent& Source, bool bReplace);
-	void RemoveFrontageOverride(UDeepLevelRoadsideFrontageSplineComponent& Frontage);
+	UDeepLevelRoadsideFrontageSplineComponent* CreateManualFrontage(
+		const TArray<FVector>& WorldPoints, bool bClosed, const FGuid& ReplacedId, bool bRefresh = true);
+	void RemoveFrontageOverride(UDeepLevelRoadsideFrontageSplineComponent& Frontage, bool bRefresh = true);
 #endif
 	virtual TSharedPtr<const FDeepLevelBuildingPreparedLayout> GetPreparedBuildingLayout() const override { return GeneratingLayout; }
 	virtual UDeepLevelBuildingPlacementCatalog* LoadBuildingCatalog() const override { return Catalog.LoadSynchronous(); }

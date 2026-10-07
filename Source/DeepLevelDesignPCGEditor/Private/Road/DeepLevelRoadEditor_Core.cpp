@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Road/DeepLevelRoadEditor.h"
+#include "Road/DeepLevelRoadCatalogAuthoring.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelRoadEditor)
 
@@ -198,6 +199,7 @@ FText GetRoadTileTypeDisplayName(const FDeepLevelRoadTileDefinition& Tile)
 
 FDeepLevelRoadTileCatalogEditorToolkit::~FDeepLevelRoadTileCatalogEditorToolkit()
 {
+	FCoreUObjectDelegates::OnObjectPropertyChanged.RemoveAll(this);
 	PreviewViewport.Reset();
 	TileList.Reset();
 	DetailsView.Reset();
@@ -215,6 +217,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::InitEditor(
 	{
 		return;
 	}
+	FCoreUObjectDelegates::OnObjectPropertyChanged.AddSP(this, &FDeepLevelRoadTileCatalogEditorToolkit::HandleCatalogChanged);
 	Proxy = NewObject<UDeepLevelRoadTileEditorProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	FPropertyEditorModule& PropertyEditor = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
 	FDetailsViewArgs DetailsArgs;
@@ -475,10 +478,7 @@ void FDeepLevelRoadTileCatalogEditorToolkit::RefreshValidation()
 
 void FDeepLevelRoadTileCatalogEditorToolkit::ModifyCatalog(const FText& TransactionText, TFunctionRef<void()> Mutation)
 {
-	FScopedTransaction Transaction(TransactionText);
-	Catalog->Modify();
-	Mutation();
-	Catalog->MarkPackageDirty();
+	DeepLevelRoadCatalogAuthoring::Edit(*Catalog, TransactionText, Mutation);
 	RefreshValidation();
 }
 
@@ -592,3 +592,11 @@ void FDeepLevelRoadTileCatalogEditorToolkit::OnSelectionChanged(TSharedPtr<int32
 }
 
 #undef LOCTEXT_NAMESPACE
+
+void FDeepLevelRoadTileCatalogEditorToolkit::HandleCatalogChanged(UObject* Object, FPropertyChangedEvent& Event)
+{
+ if (Object != Catalog) { return; }
+ RefreshItems();
+ SelectedTile = Catalog->Tiles.IsEmpty() ? INDEX_NONE : FMath::Clamp(SelectedTile, 0, Catalog->Tiles.Num()-1);
+ LoadProxy(); RefreshValidation(); RefreshPreview();
+}

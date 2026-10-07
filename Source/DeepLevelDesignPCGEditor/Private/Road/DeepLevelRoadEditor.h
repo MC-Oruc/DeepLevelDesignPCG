@@ -200,6 +200,7 @@ private:
 	void CommitProxy(const FPropertyChangedEvent& Event);
 	void RefreshPreview();
 	void RefreshValidation();
+	void HandleCatalogChanged(UObject* Object, FPropertyChangedEvent& Event);
 	void ModifyCatalog(const FText& TransactionText, TFunctionRef<void()> Mutation);
 	FReply AddTile();
 	FReply RemoveTile();

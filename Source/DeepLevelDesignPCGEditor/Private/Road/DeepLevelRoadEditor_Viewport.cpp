@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Road/DeepLevelRoadEditor.h"
+#include "Road/DeepLevelRoadCatalogAuthoring.h"
 
 // ---- DeepLevelRoadSplineComponentVisualizer ----
 
@@ -1190,20 +1191,7 @@ bool SDeepLevelRoadTileCatalogPreviewViewport::AutoFitVolume(
 	FVector& OutCenter,
 	FVector& OutExtent)
 {
-	ClearPreview();
-	if (!TileMesh)
-	{
-		return false;
-	}
-	const FBox Bounds = TileMesh->GetBoundingBox();
-	const bool bValid = Bounds.IsValid != 0;
-	if (bValid)
-	{
-		OutCenter = Bounds.GetCenter();
-		OutExtent = FVector(GridCellSize * 0.5, GridCellSize * 0.5, FMath::Max(Bounds.GetExtent().Z, 1.0));
-	}
-	ClearPreview();
-	return bValid;
+	return DeepLevelRoadCatalogAuthoring::AutoFit(TileMesh, GridCellSize, OutCenter, OutExtent);
 }
 
 FVector SDeepLevelRoadTileCatalogPreviewViewport::GetVolumeCenterWorld() const
