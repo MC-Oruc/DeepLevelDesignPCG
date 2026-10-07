@@ -25,6 +25,27 @@ namespace
 	}
 }
 
+TArray<FDeepLevelCityBuilding> DeepLevelBuildingLayout::BuildPublishedBuildings(
+	const FGuid& SourceGuid,
+	const FDeepLevelBuildingLinePlan& Plan,
+	const TConstArrayView<FTransform> VerifiedTransforms)
+{
+	check(Plan.Placements.Num() == VerifiedTransforms.Num());
+	TArray<FDeepLevelCityBuilding> Buildings;
+	Buildings.Reserve(Plan.Placements.Num());
+	TMap<FGuid, int32> FrontageIndices;
+	for (int32 Index = 0; Index < Plan.Placements.Num(); ++Index)
+	{
+		const FDeepLevelBuildingLinePlacement& Placement = Plan.Placements[Index];
+		int32& FrontageIndex = FrontageIndices.FindOrAdd(Placement.FrontageId);
+		FDeepLevelCityBuilding& Building = Buildings.Emplace_GetRef();
+		Building.StableId = FDeepLevelCityStableId::MakeBuildingId(SourceGuid, Placement.FrontageId, FrontageIndex++);
+		Building.BuildingClass = Placement.BuildingClass;
+		Building.Transform = VerifiedTransforms[Index];
+	}
+	return Buildings;
+}
+
 uint32 ADeepLevelPCGBuildingLineActor::GetInputKey() const
 {
 	// Identifies the complete placement input across editor reloads.
@@ -194,6 +215,7 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationStarted(UPCGComponent* Componen
 	}
 	GeneratingLayout = PreparedLayout;
 	bOutputCurrent = false;
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	RejectedPlacementCount = GeneratingLayout->RejectedCount;
 }
 
@@ -221,6 +243,8 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 		TEXT("Building generation verification: %d planned, %d managed actors, generating key %u."),
 		GeneratingLayout->Plan.Placements.Num(), Actors.Num(), GeneratingLayout->InputKey);
 	TBitArray<> Matched(false, Actors.Num());
+	TArray<FTransform> VerifiedTransforms;
+	VerifiedTransforms.SetNum(GeneratingLayout->Plan.Placements.Num());
 	for (int32 Index = 0; Index < GeneratingLayout->Plan.Placements.Num() && bMatches; ++Index)
 	{
 		bMatches = false;
@@ -234,6 +258,7 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 			if (!Matched[ActorIndex] && TargetClass && Actors[ActorIndex]->GetClass() == TargetClass
 				&& Actors[ActorIndex]->GetActorTransform().Equals(GeneratingLayout->Transforms[Index], 0.01))
 			{
+				VerifiedTransforms[Index] = Actors[ActorIndex]->GetActorTransform();
 				Matched[ActorIndex] = true; bMatches = true; break;
 			}
 		}
@@ -253,6 +278,8 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 		return;
 	}
 	GeneratedFragment = GeneratingLayout->Fragment;
+	GeneratedFragment.Buildings = DeepLevelBuildingLayout::BuildPublishedBuildings(
+		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms);
 	GeneratedInputKey = GeneratingLayout->InputKey;
 	bOutputCurrent = true;
 	GeneratingLayout.Reset();
@@ -276,6 +303,7 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCancelled(UPCGComponent* Compon
 {
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	if (LastGenerationError.IsEmpty()) { LastGenerationError = LOCTEXT("Cancelled", "Building generation was cancelled; generate again before publishing the layout."); }
 	UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
 	BroadcastBuildingFailure(LastGenerationError);

@@ -209,6 +209,28 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityAnchor
 	int32 SourceRevision = 0;
 };
 
+/** Generated building placement, independent of decoration definitions. */
+USTRUCT(BlueprintType)
+struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuilding
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
+	FGuid StableId;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
+	FGuid SourceGuid;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building")
+	TSoftClassPtr<AActor> BuildingClass;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building")
+	FTransform Transform = FTransform::Identity;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
+	int32 SourceRevision = 0;
+};
+
 USTRUCT()
 struct DEEPLEVELDESIGNPCG_API FDeepLevelCityLayoutFragment
 {
@@ -225,6 +247,9 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityLayoutFragment
 
 	UPROPERTY()
 	TArray<FDeepLevelCityAnchor> Anchors;
+
+	UPROPERTY()
+	TArray<FDeepLevelCityBuilding> Buildings;
 };
 
 class DEEPLEVELDESIGNPCG_API FDeepLevelCityLayoutSnapshot
@@ -233,6 +258,7 @@ public:
 	const FDeepLevelCityGrid& GetGrid() const { return Grid; }
 	const TMap<FIntPoint, FDeepLevelCityCellState>& GetCells() const { return Cells; }
 	const TArray<FDeepLevelCityAnchor>& GetAnchors() const { return Anchors; }
+	const TArray<FDeepLevelCityBuilding>& GetBuildings() const { return Buildings; }
 	const FDeepLevelCityCellState* FindCell(const FIntPoint& Cell) const { return Cells.Find(Cell); }
 
 private:
@@ -240,6 +266,7 @@ private:
 	FDeepLevelCityGrid Grid;
 	TMap<FIntPoint, FDeepLevelCityCellState> Cells;
 	TArray<FDeepLevelCityAnchor> Anchors;
+	TArray<FDeepLevelCityBuilding> Buildings;
 };
 
 class DEEPLEVELDESIGNPCG_API FDeepLevelCityStableId
@@ -247,6 +274,7 @@ class DEEPLEVELDESIGNPCG_API FDeepLevelCityStableId
 public:
 	static FGuid MakeAnchorId(const FGuid& SourceGuid, FStringView SourceLocalKey, FName AnchorSlot);
 	static FGuid MakePlacementId(const FGuid& AnchorId, const FGuid& CategoryEntryGuid, int32 Slot);
+	static FGuid MakeBuildingId(const FGuid& SourceGuid, const FGuid& FrontageId, int32 PlacementIndex);
 };
 
 class DEEPLEVELDESIGNPCG_API FDeepLevelCityLayoutBuilder

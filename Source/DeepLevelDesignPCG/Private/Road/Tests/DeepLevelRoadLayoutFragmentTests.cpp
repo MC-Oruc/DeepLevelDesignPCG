@@ -14,6 +14,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 
@@ -182,7 +183,12 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 	DecalEntry.PlacementSlot = TEXT("Decal");
 	CityLayout->DecorationSet = NewObject<UDeepLevelCityDecorationSet>(CityLayout);
 	CityLayout->DecorationSet->Categories.Add(Category);
-	TestTrue(TEXT("City decoration materializes all output adapters"), CityLayout->DecorationComponent->Regenerate(true, Error));
+	TestFalse(TEXT("Surface materials cannot be materialized as decals"), CityLayout->DecorationComponent->Regenerate(true, Error));
+	TestFalse(TEXT("Invalid decal output exposes its validation error"), Error.IsEmpty());
+	TestEqual(TEXT("Invalid outputs generate no partial placements"), CityLayout->DecorationComponent->LastPlacementCount, 0);
+	DecalEntry.DecalMaterial = UMaterial::GetDefaultMaterial(MD_DeferredDecal);
+	const bool bGenerated = CityLayout->DecorationComponent->Regenerate(true, Error);
+	if (!TestTrue(FString::Printf(TEXT("City decoration materializes all output adapters: %s"), *Error.ToString()), bGenerated)) { return false; }
 	TestTrue(TEXT("Materializer exposes placement diagnostics"), CityLayout->DecorationComponent->LastPlacementCount > 0);
 	TestTrue(TEXT("Materializer exposes regenerated chunks"), !CityLayout->DecorationComponent->LastDirtyChunks.IsEmpty());
 	TInlineComponentArray<UHierarchicalInstancedStaticMeshComponent*> HISMs(CityLayout);

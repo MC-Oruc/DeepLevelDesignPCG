@@ -2,7 +2,11 @@
 
 #include "City/DeepLevelCityDecoration.h"
 #include "DeepLevelDesignPCGModule.h"
-#include "DeepLevelDesignPCGModule.h"
+#include "City/Decoration/DeepLevelCityBuildingDecorationProfile.h"
+#include "City/Decoration/DeepLevelCityBuildingDecorationResolver.h"
+#include "City/Decoration/DeepLevelCityDecorationValidation.h"
+#include "Serialization/BufferArchive.h"
+#include "Misc/SecureHash.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityDecoration)
 
@@ -118,36 +122,33 @@ namespace
 		return nullptr;
 	}
 
-	bool ValidateResolvedOutputs(
-		const TConstArrayView<FDeepLevelCityResolvedDecoration> Placements,
-		FText& OutError)
+	FGuid MakeChunkSignature(const TConstArrayView<FDeepLevelCityResolvedDecoration> Placements)
 	{
+		FBufferArchive Bytes;
 		for (const FDeepLevelCityResolvedDecoration& Placement : Placements)
 		{
-			if (Placement.Output == EDeepLevelCityDecorationOutput::Mesh)
-			{
-				if (!Placement.Mesh.LoadSynchronous())
-				{
-					OutError = LOCTEXT("InvalidDecorationMesh", "City Decoration contains an invalid mesh output.");
-					return false;
-				}
-				continue;
-			}
-			if (Placement.Output == EDeepLevelCityDecorationOutput::Actor)
-			{
-				UClass* ActorClass = Placement.ActorClass.LoadSynchronous();
-				if (!ActorClass || ActorClass->HasAnyClassFlags(CLASS_Abstract))
-				{
-					OutError = LOCTEXT("InvalidDecorationActor", "City Decoration contains an invalid or abstract Actor output.");
-					return false;
-				}
-				continue;
-			}
-			if (!Placement.DecalMaterial.LoadSynchronous())
-			{
-				OutError = LOCTEXT("InvalidDecorationDecal", "City Decoration contains an invalid Decal output.");
-				return false;
-			}
+			FGuid Id = Placement.StableId;
+			uint8 Output = static_cast<uint8>(Placement.Output);
+			FString Mesh = Placement.Mesh.ToSoftObjectPath().ToString();
+			FString Actor = Placement.ActorClass.ToSoftObjectPath().ToString();
+			FString Material = Placement.DecalMaterial.ToSoftObjectPath().ToString();
+			FVector Size = Placement.DecalSize;
+			FTransform Transform = Placement.Transform;
+			Bytes << Id << Output << Mesh << Actor << Material << Size << Transform;
+		}
+		FMD5 Hash;
+		Hash.Update(Bytes.GetData(), Bytes.Num());
+		uint32 Digest[4];
+		Hash.Final(reinterpret_cast<uint8*>(Digest));
+		return FGuid(Digest[0], Digest[1], Digest[2], Digest[3]);
+	}
+
+	bool ValidateResolvedOutputs(const TConstArrayView<FDeepLevelCityResolvedDecoration> Placements, FText& OutError)
+	{
+		for (const auto& Placement : Placements)
+		{
+			if (!DeepLevelCityDecorationValidation::ValidateOutput(Placement.Output, Placement.Mesh,
+				Placement.ActorClass, Placement.DecalMaterial, Placement.DecalSize, OutError)) { return false; }
 		}
 		return true;
 	}
@@ -253,6 +254,22 @@ bool UDeepLevelCityDecorationSet::Validate(FText& OutError) const
 			}
 			Guids.Add(Entry.EntryGuid);
 		}
+	}
+	TSet<FSoftObjectPath> BuildingClasses;
+	for (const UDeepLevelCityBuildingDecorationProfile* Profile : BuildingProfiles)
+	{
+		if (!Profile)
+		{
+			OutError = LOCTEXT("MissingBuildingProfile", "Decoration Set contains a missing building decoration profile.");
+			return false;
+		}
+		if (!Profile->Validate(OutError)) { return false; }
+		if (BuildingClasses.Contains(Profile->BuildingClass.ToSoftObjectPath()))
+		{
+			OutError = LOCTEXT("DuplicateBuildingProfile", "Decoration Set assigns multiple decoration profiles to the same building class.");
+			return false;
+		}
+		BuildingClasses.Add(Profile->BuildingClass.ToSoftObjectPath());
 	}
 	return true;
 }
@@ -399,6 +416,8 @@ bool FDeepLevelCityDecorationResolver::Resolve(
 		OutPlacements.Add(Candidate.Placement);
 	}
 
+	DeepLevelCityBuildingDecoration::Resolve(Snapshot, DecorationSet, Seed, OutPlacements);
+
 	TSet<FGuid> OverriddenIds;
 	for (const FDeepLevelCityDecorationOverride& Override : Overrides)
 	{
@@ -514,8 +533,6 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 		LastGenerationError = OutError;
 		return false;
 	}
-	TSet<FIntPoint> DirtyChunks;
-	FDeepLevelCityLayoutBuilder::FindDirtyChunks(nullptr, *Snapshot, DirtyChunks);
 	TArray<FDeepLevelCityResolvedDecoration> Placements;
 	if (!FDeepLevelCityDecorationResolver::Resolve(
 		*Snapshot,
@@ -533,35 +550,32 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 		LastGenerationError = OutError;
 		return false;
 	}
-	if (bForceAll)
+	TMap<FIntPoint, TArray<FDeepLevelCityResolvedDecoration>> ResolvedChunks;
+	for (const FDeepLevelCityResolvedDecoration& Placement : Placements)
 	{
-		for (const TPair<FIntPoint, FDeepLevelCityMaterializedChunk>& Pair : MaterializedChunks)
+		ResolvedChunks.FindOrAdd(Placement.Chunk).Add(Placement);
+	}
+	TSet<FIntPoint> DirtyChunks;
+	for (const auto& Pair : MaterializedChunks)
+	{
+		if (bForceAll || !ResolvedChunks.Contains(Pair.Key)) { DirtyChunks.Add(Pair.Key); }
+	}
+	for (const auto& Pair : ResolvedChunks)
+	{
+		const FDeepLevelCityMaterializedChunk* Existing = MaterializedChunks.Find(Pair.Key);
+		if (bForceAll || !Existing || Existing->ContentSignature != MakeChunkSignature(Pair.Value))
 		{
 			DirtyChunks.Add(Pair.Key);
 		}
-		for (const FDeepLevelCityResolvedDecoration& Placement : Placements)
-		{
-			DirtyChunks.Add(Placement.Chunk);
-		}
 	}
-
 	for (const FIntPoint& Chunk : DirtyChunks)
 	{
 		ClearChunk(Chunk);
-		TArray<FDeepLevelCityResolvedDecoration> ChunkPlacements;
-		for (const FDeepLevelCityResolvedDecoration& Placement : Placements)
+		const TArray<FDeepLevelCityResolvedDecoration>* ChunkPlacements = ResolvedChunks.Find(Chunk);
+		if (!ChunkPlacements) { continue; }
+		if (!MaterializeChunk(Chunk, *ChunkPlacements, OutError))
 		{
-			if (Placement.Chunk == Chunk)
-			{
-				ChunkPlacements.Add(Placement);
-			}
-		}
-		if (!MaterializeChunk(Chunk, ChunkPlacements, OutError))
-		{
-			for (const FIntPoint& DirtyChunk : DirtyChunks)
-			{
-				ClearChunk(DirtyChunk);
-			}
+			for (const FIntPoint& DirtyChunk : DirtyChunks) { ClearChunk(DirtyChunk); }
 			LastGenerationError = OutError;
 			return false;
 		}
@@ -609,16 +623,6 @@ void UDeepLevelCityDecorationComponent::ClearChunk(const FIntPoint& Chunk)
 			}
 			Component->DestroyComponent();
 		}
-	}
-}
-
-void UDeepLevelCityDecorationComponent::ClearAllChunks()
-{
-	TArray<FIntPoint> Chunks;
-	MaterializedChunks.GetKeys(Chunks);
-	for (const FIntPoint& Chunk : Chunks)
-	{
-		ClearChunk(Chunk);
 	}
 }
 
@@ -707,6 +711,7 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 		Decal->SetWorldTransform(Placement.Transform);
 		Output.Components.Add(Decal);
 	}
+	Output.ContentSignature = MakeChunkSignature(Placements);
 	return true;
 }
 

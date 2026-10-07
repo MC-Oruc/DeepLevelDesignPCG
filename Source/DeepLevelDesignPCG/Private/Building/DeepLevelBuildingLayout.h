@@ -13,6 +13,14 @@ struct FDeepLevelBuildingPreparedLayout
 	int32 RejectedCount = 0;
 };
 
+namespace DeepLevelBuildingLayout
+{
+	TArray<FDeepLevelCityBuilding> BuildPublishedBuildings(
+		const FGuid& SourceGuid,
+		const FDeepLevelBuildingLinePlan& Plan,
+		TConstArrayView<FTransform> VerifiedTransforms);
+}
+
 namespace DeepLevelBuildingRoadside
 {
 	struct FFrontageSpline

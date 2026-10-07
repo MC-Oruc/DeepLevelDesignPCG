@@ -11,6 +11,7 @@
 #include "PropertyEditorModule.h"
 #include "Road/DeepLevelRoadEditor.h"
 #include "Building/DeepLevelBuildingEditor.h"
+#include "City/Decoration/DeepLevelCityBuildingDecorationEditor.h"
 #include "Editor/UnrealEdEngine.h"
 #include "UnrealEdGlobals.h"
 #include "Widgets/Notifications/SNotificationList.h"
@@ -36,6 +37,7 @@ public:
 			LOCTEXT("MessageLogLabel", "Deep Level Design PCG"));
 
 		RegisterAssetActions<FDeepLevelBuildingCatalogAssetTypeActions>(AssetTools);
+		RegisterAssetActions<FDeepLevelCityDecorationSetAssetActions>(AssetTools);
 		RegisterAssetActions<FDeepLevelRoadTileCatalogAssetTypeActions>(AssetTools);
 
 		FPropertyEditorModule& PropertyEditor =

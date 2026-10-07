@@ -151,6 +151,10 @@ void ADeepLevelPCGRoadsideBuildingActor::PostDuplicate(const EDuplicateMode::Typ
 	Super::PostDuplicate(DuplicateMode);
 	LayoutSourceGuid = FGuid::NewGuid();
 	LayoutRevision = 0;
+	GeneratedBuildings.Reset();
+	PreparedLayout.Reset();
+	GeneratingLayout.Reset();
+	bOutputCurrent = false;
 }
 
 void ADeepLevelPCGRoadsideBuildingActor::EnsureLayoutSourceGuid()
@@ -179,6 +183,7 @@ bool ADeepLevelPCGRoadsideBuildingActor::BuildCityLayoutFragment(
 	OutFragment = PreparedLayout ? PreparedLayout->Fragment : FDeepLevelCityLayoutFragment{};
 	OutFragment.SourceGuid = LayoutSourceGuid;
 	OutFragment.SourceRevision = LayoutRevision;
+	if (bOutputCurrent) { OutFragment.Buildings = GeneratedBuildings; }
 	return true;
 }
 
@@ -641,6 +646,7 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationStarted(UPCGCompone
 {
 	GeneratingLayout = PreparedLayout;
 	bOutputCurrent = false;
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	BuildingPlacementCount = 0;
 	RejectedPlacementCount = GeneratingLayout ? GeneratingLayout->RejectedCount : 0;
 	if (!GeneratingLayout)
@@ -670,6 +676,8 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCompleted(UPCGCompo
 	});
 	bool bMatches = Actors.Num() == GeneratingLayout->Plan.Placements.Num();
 	TBitArray<> Matched(false, Actors.Num());
+	TArray<FTransform> VerifiedTransforms;
+	VerifiedTransforms.SetNum(GeneratingLayout->Plan.Placements.Num());
 	for (int32 PlacementIndex = 0;
 		PlacementIndex < GeneratingLayout->Plan.Placements.Num() && bMatches; ++PlacementIndex)
 	{
@@ -681,6 +689,7 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCompleted(UPCGCompo
 				&& Actors[ActorIndex]->GetActorTransform().Equals(GeneratingLayout->Transforms[PlacementIndex], 0.01))
 			{
 				Matched[ActorIndex] = true;
+				VerifiedTransforms[PlacementIndex] = Actors[ActorIndex]->GetActorTransform();
 				bMatches = true;
 				break;
 			}
@@ -696,17 +705,21 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCompleted(UPCGCompo
 		return;
 	}
 	BuildingPlacementCount = Actors.Num();
+	GeneratedBuildings = DeepLevelBuildingLayout::BuildPublishedBuildings(
+		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms);
 	bOutputCurrent = true;
 	LastGenerationError = FText::GetEmpty();
 	GeneratingLayout.Reset();
 	MarkPackageDirty();
 	UE_LOG(LogDeepLevelRoadsideBuilding, Log, TEXT("Generated %d roadside buildings."), BuildingPlacementCount);
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 }
 
 void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCancelled(UPCGComponent*)
 {
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	if (LastGenerationError.IsEmpty())
 	{
 		LastGenerationError = LOCTEXT("RoadsideGenerationCancelled", "Roadside Building generation was cancelled.");
@@ -719,6 +732,8 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCleaned(UPCGCompone
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
 	BuildingPlacementCount = 0;
+	GeneratedBuildings.Reset();
+	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	MarkPackageDirty();
 }
 

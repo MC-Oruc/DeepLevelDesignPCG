@@ -245,6 +245,7 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 		return false;
 	}
 	OutFragment = PreparedLayout->Fragment;
+	if (bOutputCurrent) { OutFragment.Buildings = GeneratedFragment.Buildings; }
 	return true;
 }
 

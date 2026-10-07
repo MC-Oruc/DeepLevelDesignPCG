@@ -498,6 +498,9 @@ private:
 	void OnBuildingGenerationCompleted(UPCGComponent* Component);
 	void OnBuildingGenerationCancelled(UPCGComponent* Component);
 	void OnBuildingGenerationCleaned(UPCGComponent* Component);
+
+	UPROPERTY()
+	TArray<FDeepLevelCityBuilding> GeneratedBuildings;
 	void EnsureLayoutSourceGuid();
 	void SynchronizeCityLayoutRegistration();
 	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;

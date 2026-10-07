@@ -222,6 +222,13 @@ FGuid FDeepLevelCityStableId::MakePlacementId(
 		LexToString(Slot)));
 }
 
+FGuid FDeepLevelCityStableId::MakeBuildingId(
+	const FGuid& SourceGuid, const FGuid& FrontageId, const int32 PlacementIndex)
+{
+	return FGuid::NewDeterministicGuid(MakeStableKey(SourceGuid,
+		FrontageId.ToString(EGuidFormats::Digits), FString::Printf(TEXT("Building:%d"), PlacementIndex)));
+}
+
 bool FDeepLevelCityLayoutBuilder::Build(
 	const FDeepLevelCityGrid& Grid,
 	const TConstArrayView<FDeepLevelCityLayoutFragment> Fragments,
@@ -238,6 +245,7 @@ bool FDeepLevelCityLayoutBuilder::Build(
 	Snapshot->Grid = Grid;
 	TSet<FGuid> SourceGuids;
 	TSet<FGuid> AnchorIds;
+	TSet<FGuid> BuildingIds;
 	for (const FDeepLevelCityLayoutFragment& Fragment : Fragments)
 	{
 		if (!Fragment.SourceGuid.IsValid() || Fragment.SourceRevision < 0 || SourceGuids.Contains(Fragment.SourceGuid))
@@ -253,6 +261,21 @@ bool FDeepLevelCityLayoutBuilder::Build(
 			Merged.Cell = Cell.Cell;
 			Merged.OccupancyMask |= Cell.OccupancyMask;
 			Merged.Tags.AppendTags(Cell.Tags);
+		}
+
+		for (const FDeepLevelCityBuilding& Building : Fragment.Buildings)
+		{
+			if (!Building.StableId.IsValid() || BuildingIds.Contains(Building.StableId)
+				|| Building.BuildingClass.IsNull() || !Building.BuildingClass.ToSoftObjectPath().IsValid()
+				|| !Building.Transform.IsValid())
+			{
+				OutError = LOCTEXT("InvalidCityBuilding", "City Layout contains an invalid or duplicate building placement.");
+				return false;
+			}
+			BuildingIds.Add(Building.StableId);
+			FDeepLevelCityBuilding& Published = Snapshot->Buildings.Add_GetRef(Building);
+			Published.SourceGuid = Fragment.SourceGuid;
+			Published.SourceRevision = Fragment.SourceRevision;
 		}
 
 		for (const FDeepLevelCityAnchor& Anchor : Fragment.Anchors)
@@ -275,6 +298,10 @@ bool FDeepLevelCityLayoutBuilder::Build(
 		return A.StableId < B.StableId;
 	});
 	OutSnapshot = Snapshot;
+	Snapshot->Buildings.Sort([](const FDeepLevelCityBuilding& A, const FDeepLevelCityBuilding& B)
+	{
+		return A.StableId < B.StableId;
+	});
 	OutError = FText::GetEmpty();
 	return true;
 }
@@ -287,6 +314,10 @@ void FDeepLevelCityLayoutBuilder::FindDirtyChunks(
 	OutDirtyChunks.Reset();
 	if (!Previous)
 	{
+		for (const FDeepLevelCityBuilding& Building : Current.Buildings)
+		{
+			AddCellChunk(Current.Grid, Current.Grid.WorldToCell(Building.Transform.GetLocation()), OutDirtyChunks);
+		}
 		for (const TPair<FIntPoint, FDeepLevelCityCellState>& Pair : Current.Cells)
 		{
 			AddCellChunk(Current.Grid, Pair.Key, OutDirtyChunks);
@@ -299,6 +330,31 @@ void FDeepLevelCityLayoutBuilder::FindDirtyChunks(
 			}
 		}
 		return;
+	}
+
+	TMap<FGuid, const FDeepLevelCityBuilding*> PreviousBuildings;
+	for (const FDeepLevelCityBuilding& Building : Previous->Buildings)
+	{
+		PreviousBuildings.Add(Building.StableId, &Building);
+	}
+	for (const FDeepLevelCityBuilding& Building : Current.Buildings)
+	{
+		const FDeepLevelCityBuilding* Old = PreviousBuildings.FindRef(Building.StableId);
+		if (!Old || Old->BuildingClass != Building.BuildingClass
+			|| Old->SourceGuid != Building.SourceGuid || Old->SourceRevision != Building.SourceRevision
+			|| !Old->Transform.Equals(Building.Transform))
+		{
+			AddCellChunk(Current.Grid, Current.Grid.WorldToCell(Building.Transform.GetLocation()), OutDirtyChunks);
+			if (Old)
+			{
+				AddCellChunk(Previous->Grid, Previous->Grid.WorldToCell(Old->Transform.GetLocation()), OutDirtyChunks);
+			}
+		}
+		PreviousBuildings.Remove(Building.StableId);
+	}
+	for (const auto& Pair : PreviousBuildings)
+	{
+		AddCellChunk(Previous->Grid, Previous->Grid.WorldToCell(Pair.Value->Transform.GetLocation()), OutDirtyChunks);
 	}
 
 	TSet<FIntPoint> AllCells;

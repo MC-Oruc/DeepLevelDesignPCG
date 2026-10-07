@@ -11,6 +11,8 @@
 class AActor;
 class UMaterialInterface;
 class UStaticMesh;
+class UDeepLevelCityBuildingDecorationProfile;
+class UDeepLevelBuildingPlacementCatalog;
 
 UENUM(BlueprintType)
 enum class EDeepLevelCityDecorationOutput : uint8
@@ -127,6 +129,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Decoration")
 	TArray<TObjectPtr<UDeepLevelCityDecorationCategory>> Categories;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Decoration")
+	TArray<TObjectPtr<UDeepLevelCityBuildingDecorationProfile>> BuildingProfiles;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditAnywhere, Category = "Authoring")
+	TSoftObjectPtr<UDeepLevelBuildingPlacementCatalog> BuildingCatalog;
+#endif
+
 	bool Validate(FText& OutError) const;
 };
 
@@ -134,6 +144,8 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityResolvedDecoration
 {
 	FGuid StableId;
 	FGuid AnchorId;
+	FGuid BuildingId;
+	FGuid VariantId;
 	FGuid EntryGuid;
 	EDeepLevelCityDecorationOutput Output = EDeepLevelCityDecorationOutput::Mesh;
 	TSoftObjectPtr<UStaticMesh> Mesh;
@@ -168,6 +180,9 @@ struct FDeepLevelCityMaterializedChunk
 
 	UPROPERTY()
 	TArray<TObjectPtr<UActorComponent>> Components;
+
+	UPROPERTY()
+	FGuid ContentSignature;
 };
 
 /** Applies resolved city decorations through chunk-owned HISM, Actor, and Decal adapters. */
@@ -196,7 +211,6 @@ public:
 
 private:
 	void ClearChunk(const FIntPoint& Chunk);
-	void ClearAllChunks();
 	bool MaterializeChunk(
 		const FIntPoint& Chunk,
 		TConstArrayView<FDeepLevelCityResolvedDecoration> Placements,
