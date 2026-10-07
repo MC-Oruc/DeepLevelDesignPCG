@@ -30,6 +30,13 @@
     {
       "Name": "PCG",
       "Enabled": true
+    },
+    {
+      "Name": "ToolsetRegistry",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
     }
   ]
 }

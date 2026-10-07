@@ -7,12 +7,14 @@
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/StrongObjectPtr.h"
 
 #define LOCTEXT_NAMESPACE "DeepLevelCityDecorationDocument"
 namespace Authoring = DeepLevelCityDecorationAuthoring;
 
-FDeepLevelCityDecorationDocument::FDeepLevelCityDecorationDocument()
+FDeepLevelCityDecorationDocument::FDeepLevelCityDecorationDocument(EDeepLevelCityDecorationEditMode Mode) : EditMode(Mode)
 {
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging) { return; }
 	PropertyChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FDeepLevelCityDecorationDocument::ObjectChanged);
 	if (GEditor) { GEditor->RegisterForUndo(this); }
 }
@@ -39,6 +41,7 @@ void FDeepLevelCityDecorationDocument::AddReferencedObjects(FReferenceCollector&
 void FDeepLevelCityDecorationDocument::Open(UDeepLevelCityDecorationSet* InSet, UDeepLevelCityBuildingDecorationProfile* RequestedProfile)
 {
 	if (bClosed) { return; }
+	check(EditMode != EDeepLevelCityDecorationEditMode::Staging || !InSet || InSet->HasAnyFlags(RF_Transient));
 	EndDrag();
 	Set = InSet;
 	Catalog = Set ? Set->BuildingCatalog.LoadSynchronous() : nullptr;
@@ -66,7 +69,7 @@ void FDeepLevelCityDecorationDocument::Open(UDeepLevelCityDecorationSet* InSet, 
 
 void FDeepLevelCityDecorationDocument::SetCatalog(UDeepLevelBuildingPlacementCatalog* InCatalog)
 {
-	if (bClosed || !Set || Catalog == InCatalog) { return; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || bClosed || !Set || Catalog == InCatalog) { return; }
 	EndDrag();
 	{
 		TGuardValue<bool> Guard(bMutating, true);
@@ -142,7 +145,7 @@ bool FDeepLevelCityDecorationDocument::CanCreateProfile() const
 
 bool FDeepLevelCityDecorationDocument::AttachProfile(UDeepLevelCityBuildingDecorationProfile* InProfile, bool bInitializeNew)
 {
-	if (!InProfile || !CanCreateProfile()) { return false; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || !InProfile || !CanCreateProfile()) { return false; }
 	if (bInitializeNew)
 	{
 		if (!InProfile->BuildingClass.IsNull() || !InProfile->Variants.IsEmpty()) { return false; }
@@ -246,6 +249,13 @@ void FDeepLevelCityDecorationDocument::Edit(const FText& Description, EDeepLevel
 {
 	EndDrag();
 	if (!CanEdit()) { return; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging)
+	{
+		check(Profile->HasAnyFlags(RF_Transient));
+		Mutation();
+		Notify(Change);
+		return;
+	}
 	{
 		TGuardValue<bool> Guard(bMutating, true);
 		const FScopedTransaction Transaction(Description);
@@ -263,7 +273,7 @@ void FDeepLevelCityDecorationDocument::Edit(const FText& Description, EDeepLevel
 bool FDeepLevelCityDecorationDocument::RemoveAssignment(const UDeepLevelCityDecorationSet* ExpectedSet,
 	int32 Index, const UDeepLevelCityBuildingDecorationProfile* ExpectedProfile)
 {
-	if (bClosed || !Set || Set != ExpectedSet || !Set->BuildingProfiles.IsValidIndex(Index) || Set->BuildingProfiles[Index] != ExpectedProfile) { return false; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || bClosed || !Set || Set != ExpectedSet || !Set->BuildingProfiles.IsValidIndex(Index) || Set->BuildingProfiles[Index] != ExpectedProfile) { return false; }
 	EndDrag();
 	{
 		TGuardValue<bool> Guard(bMutating, true);
@@ -280,7 +290,7 @@ bool FDeepLevelCityDecorationDocument::RemoveAssignment(const UDeepLevelCityDeco
 
 void FDeepLevelCityDecorationDocument::SetCategories(const TArray<TObjectPtr<UDeepLevelCityDecorationCategory>>& Categories)
 {
-	if (bClosed || !Set || Set->Categories == Categories) { return; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || bClosed || !Set || Set->Categories == Categories) { return; }
 	EndDrag();
 	{
 		TGuardValue<bool> Guard(bMutating, true);
@@ -449,6 +459,18 @@ void FDeepLevelCityDecorationDocument::BroadcastTransformChange()
 	if (Other.IsValid()) { OnChanged.Broadcast(EDeepLevelCityDecorationChange::Transform, Other); }
 }
 
+bool FDeepLevelCityDecorationDocument::CommitVariants(const TArray<FDeepLevelCityBuildingDecorationVariant>& Variants, FText& Error)
+{
+	if (EditMode != EDeepLevelCityDecorationEditMode::Undoable || !CanEdit()) { return false; }
+	TStrongObjectPtr<UDeepLevelCityBuildingDecorationProfile> Candidate(NewObject<UDeepLevelCityBuildingDecorationProfile>());
+	Candidate->BuildingClass = Profile->BuildingClass;
+	Candidate->Variants = Variants;
+	if (!Candidate->Validate(Error)) { return false; }
+	Edit(LOCTEXT("BatchEdit", "Edit Building Decoration Arrangement"), EDeepLevelCityDecorationChange::Structure,
+		[&] { Profile->Variants = Variants; });
+	return true;
+}
+
 void FDeepLevelCityDecorationDocument::DuplicateEntry()
 {
 	if (!GetEntry()) { return; }
@@ -539,7 +561,7 @@ bool FDeepLevelCityDecorationDocument::SetTransform(const FTransform& Transform,
 
 void FDeepLevelCityDecorationDocument::ApplyDragTransform(const FTransform& Transform)
 {
-	if (!CanEdit() || !GetEntry()) { return; }
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || !CanEdit() || !GetEntry()) { return; }
 	FText Error;
 	if (!DeepLevelCityDecorationValidation::ValidateTransform(Transform, Error) || !ValidateLinkedTransform(Transform, Error)) { return; }
 	if (GetEntry()->LocalTransform.Equals(Transform)) { return; }
@@ -579,8 +601,8 @@ void FDeepLevelCityDecorationDocument::EndDrag(bool bNotify, bool bExternalEdit)
 	if (bNotify && bChanged) { Notify(EDeepLevelCityDecorationChange::Transform); }
 }
 
-void FDeepLevelCityDecorationDocument::Undo() { if (bClosed) { return; } EndDrag(); if (GEditor) { GEditor->UndoTransaction(); } }
-void FDeepLevelCityDecorationDocument::Redo() { if (bClosed) { return; } EndDrag(); if (GEditor) { GEditor->RedoTransaction(); } }
+void FDeepLevelCityDecorationDocument::Undo() { if (bClosed || EditMode == EDeepLevelCityDecorationEditMode::Staging) { return; } EndDrag(); if (GEditor) { GEditor->UndoTransaction(); } }
+void FDeepLevelCityDecorationDocument::Redo() { if (bClosed || EditMode == EDeepLevelCityDecorationEditMode::Staging) { return; } EndDrag(); if (GEditor) { GEditor->RedoTransaction(); } }
 
 void FDeepLevelCityDecorationDocument::PostUndo(bool bSuccess)
 {

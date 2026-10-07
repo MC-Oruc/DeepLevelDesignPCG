@@ -13,6 +13,8 @@ enum class EDeepLevelCityDecorationChange : uint8
 	Context, Selection, Variant, Structure, Metadata, Output, Transform, Undo
 };
 
+enum class EDeepLevelCityDecorationEditMode : uint8 { Undoable, Staging };
+
 struct FDeepLevelCityDecorationDocumentIssue
 {
 	FSoftObjectPath Building;
@@ -31,7 +33,7 @@ public:
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FChanged, EDeepLevelCityDecorationChange, FGuid);
 	FChanged OnChanged;
 
-	FDeepLevelCityDecorationDocument();
+	explicit FDeepLevelCityDecorationDocument(EDeepLevelCityDecorationEditMode Mode = EDeepLevelCityDecorationEditMode::Undoable);
 	virtual ~FDeepLevelCityDecorationDocument() override;
 	void Shutdown();
 	void Open(UDeepLevelCityDecorationSet* Set, UDeepLevelCityBuildingDecorationProfile* RequestedProfile = nullptr);
@@ -55,6 +57,7 @@ public:
 	bool CreateSymmetry(EAxis::Type Axis, FGuid Target = {});
 	void UnlinkSymmetry();
 	bool SetSymmetrySettings(const FDeepLevelCityDecorationSymmetryPair& Desired, FText& Error);
+	bool CommitVariants(const TArray<FDeepLevelCityBuildingDecorationVariant>& Variants, FText& Error);
 	FGuid GetVariantId() const { return VariantId; }
 	FGuid GetEntryId() const { return EntryId; }
 	const TArray<FDeepLevelCityDecorationDocumentIssue>& GetIssues() const { return Issues; }
@@ -113,4 +116,5 @@ private:
 	bool bDirtyBeforeDrag = false;
 	bool bMutating = false;
 	bool bClosed = false;
+	EDeepLevelCityDecorationEditMode EditMode;
 };

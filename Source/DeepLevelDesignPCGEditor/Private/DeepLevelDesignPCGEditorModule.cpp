@@ -1,6 +1,8 @@
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "AssetToolsModule.h"
+#include "Automation/MCP/DeepLevelPCGToolset.h"
+#include "ToolsetRegistry/UToolsetRegistry.h"
 #include "ComponentVisualizers.h"
 #include "DeepLevelDesignPCGModule.h"
 #include "Framework/Application/SlateApplication.h"
@@ -23,6 +25,7 @@ class FDeepLevelDesignPCGEditorModule final : public IModuleInterface
 public:
 	virtual void StartupModule() override
 	{
+		UToolsetRegistry::RegisterToolsetClass(UDeepLevelPCGToolset::StaticClass());
 		if (IsRunningCommandlet())
 		{
 			return;
@@ -73,6 +76,7 @@ public:
 
 	virtual void ShutdownModule() override
 	{
+		UToolsetRegistry::UnregisterToolsetClass(UDeepLevelPCGToolset::StaticClass());
 		if (IsRunningCommandlet())
 		{
 			return;
