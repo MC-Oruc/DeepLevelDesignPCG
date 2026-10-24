@@ -225,7 +225,7 @@ bool FDeepLevelPCGDSLCaptureTest::RunTest(const FString&)
 		}
 		TestEqual(TEXT("Requested preview width is honored"), Report->GetObjectField(TEXT("camera"))->GetIntegerField(TEXT("width")), 256);
 		TestEqual(TEXT("Requested preview height is honored"), Report->GetObjectField(TEXT("camera"))->GetIntegerField(TEXT("height")), 256);
-		TestEqual(TEXT("Native tool image is PNG"), Output.Image.MimeType, FString(TEXT("image/png")));
+		TestEqual(TEXT("Native tool image is JPEG"), Output.Image.MimeType, FString(TEXT("image/jpeg")));
 		TestFalse(TEXT("Image has a payload"), Output.Image.Data.IsEmpty());
 		TestTrue(TEXT("Capture identifies visible decoration pivots"), !Report->GetArrayField(TEXT("labels")).IsEmpty());
 	}

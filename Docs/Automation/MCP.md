@@ -10,7 +10,7 @@ Two tools: `Describe()` returns the versioned DSL contract; `Execute(Request)` a
 
 flowchart TD
 
-    MCP[UE native MCP / ToolsetRegistry] --> Adapter[Automation/MCP: transport and PNG encoding]
+    MCP[UE native MCP / ToolsetRegistry] --> Adapter[Automation/MCP: transport and JPEG encoding]
 
     Adapter --> Dispatch[Automation: version and domain dispatch]
 
@@ -106,7 +106,8 @@ Positions are building-local centimeters. Rotations are `[pitch,yaw,roll]` degre
 
 - `save:false` is the default. `save:true` saves only the selected profile package, including any already-unsaved changes in that profile. It does not save the set, map or unrelated packages. A save failure leaves applied changes undoable and is reported separately.
 
-- `capture:true` draws a separate decoration preview and returns a native `FToolsetImage` PNG in the same tool response. It does not move the user's camera, open an asset editor, run PIE or regenerate a level.
+- `capture:true` draws a separate decoration preview and returns a native `FToolsetImage` JPEG in the same tool response. It does not move the user's camera, open an asset editor, run PIE or regenerate a level.
+- All native DeepLevelPCG tool captures automatically encode JPEG at quality 85 and cap the longest returned edge at 1024 pixels, preserving aspect ratio without upscaling. Camera dimensions and projected labels describe the returned image. Render size is still requested through `captureSize`. Encoding controls are console variables `DeepLevelPCG.MCP.ImageMaxLongEdge` (128..2048, default 1024) and `DeepLevelPCG.MCP.ImageJPEGQuality` (1..100, default 85); project defaults may be set under `[ConsoleVariables]` in `Config/DefaultEngine.ini`. Increase the edge limit only for a specific detail check and restore it afterward. No external conversion is needed. This policy belongs to the project plugin transport; engine plugins are unchanged.
 
 - Optional `captureSize:[width,height]` supports integer sides from 128 to 2048. Optional camera requires `location`, `rotation` and optional `fov` (10–150). Otherwise the preview focuses the building. Capture parameters require `capture:true`.
 
