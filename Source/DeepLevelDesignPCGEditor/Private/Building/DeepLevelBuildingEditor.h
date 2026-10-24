@@ -299,6 +299,7 @@ private:
 	TWeakPtr<FDeepLevelBuildingCatalogEditorToolkit> Toolkit;
 	TArray<TWeakObjectPtr<AActor>> PreviewActors;
 	TWeakObjectPtr<AActor> PrimaryActor;
+	TSoftClassPtr<AActor> FramedBuildingClass;
 	double GuideStride = 0.0;
 	FTransform PreviewVolumeTransform;
 	FVector PreviewVolumeExtent = FVector::ZeroVector;

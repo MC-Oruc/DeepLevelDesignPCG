@@ -16,6 +16,7 @@
 #include "Widgets/Input/SSearchBox.h"
 #include "STransformViewportToolbar.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
@@ -41,7 +42,15 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildWorkspace()
 		[
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()[BuildViewportControls()]
-			+ SVerticalBox::Slot().FillHeight(1)[Preview.ToSharedRef()]
+			+ SVerticalBox::Slot().FillHeight(1)
+			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()[Preview.ToSharedRef()]
+				+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Top).Padding(10)
+				[
+					BuildViewportOverlay()
+				]
+			]
 		]
 		+ SSplitter::Slot().Value(0.25f).MinSize(240)[Inspector.ToSharedRef()]
 	]
@@ -62,6 +71,41 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildWorkspace()
 				.OnSelectionChanged(this, &FDeepLevelCityBuildingDecorationEditor::IssueSelected)
 			]
 		]
+	];
+}
+
+TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportOverlay()
+{
+	const auto Shortcuts = SNew(SGridPanel).FillColumn(1, 1.0f);
+	for (int32 Row = 0; Row < 4; ++Row)
+	{
+		const auto Visible = TAttribute<EVisibility>::Create(TAttribute<EVisibility>::FGetter::CreateSPLambda(SharedThis(this), [this, Row]
+		{
+			return GetViewportShortcut(Row).Key.IsEmpty() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+		}));
+		Shortcuts->AddSlot(0, Row).Padding(0, 0, 12, 3).VAlign(VAlign_Top)
+		[
+			SNew(STextBlock).Visibility(Visible)
+			.Text(TAttribute<FText>::Create(TAttribute<FText>::FGetter::CreateSPLambda(SharedThis(this), [this, Row] { return GetViewportShortcut(Row).Key; })))
+			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black)
+			.ColorAndOpacity(FLinearColor::White)
+		];
+		Shortcuts->AddSlot(1, Row).Padding(0, 0, 0, 3).VAlign(VAlign_Top)
+		[
+			SNew(STextBlock).Visibility(Visible)
+			.Text(TAttribute<FText>::Create(TAttribute<FText>::FGetter::CreateSPLambda(SharedThis(this), [this, Row] { return GetViewportShortcut(Row).Action; })))
+			.AutoWrapText(true).ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black)
+			.ColorAndOpacity(FLinearColor::White)
+		];
+	}
+	return SNew(SHorizontalBox).Visibility(EVisibility::HitTestInvisible)
+	+ SHorizontalBox::Slot().FillWidth(0.65f).VAlign(VAlign_Top).Padding(0, 0, 20, 0)[Shortcuts]
+	+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Top)
+	[
+		SNew(STextBlock).Text(this, &FDeepLevelCityBuildingDecorationEditor::GetViewportStatus)
+		.Justification(ETextJustify::Right).AutoWrapText(true)
+		.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black)
+		.ColorAndOpacity(FLinearColor::White)
 	];
 }
 
@@ -143,7 +187,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 			+ SOverlay::Slot()
 			[
 				SAssignNew(Outline, STreeView<TSharedPtr<FDeepLevelCityDecorationOutlineItem>>).TreeItemsSource(&OutlineItems)
-				.SelectionMode(ESelectionMode::Single)
+				.SelectionMode(ESelectionMode::Multi)
 				.OnKeyDownHandler(FOnKeyDown::CreateSPLambda(SharedThis(this), [this](const FGeometry&, const FKeyEvent& Key)
 				{
 					return Preview->GetCommandList()->ProcessCommandBindings(Key) ? FReply::Handled() : FReply::Unhandled();
@@ -151,7 +195,6 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 				.OnGenerateRow(this, &FDeepLevelCityBuildingDecorationEditor::OutlineRow)
 				.OnGetChildren(this, &FDeepLevelCityBuildingDecorationEditor::OutlineChildren)
 				.OnSelectionChanged(this, &FDeepLevelCityBuildingDecorationEditor::OutlineSelected)
-				.OnMouseButtonClick(this, &FDeepLevelCityBuildingDecorationEditor::OutlineClicked)
 				.OnExpansionChanged(this, &FDeepLevelCityBuildingDecorationEditor::OutlineExpansionChanged)
 				.OnContextMenuOpening(this, &FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu)
 			]
@@ -197,7 +240,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportControl
 		]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)[Toggle(LOCTEXT("OBB", "Placement guide"), &bShowPlacementGuide, [this]
 		{
-			Preview->SetPlacementGuide(bShowPlacementGuide ? Document->GetBuildingDefinition() : nullptr);
+			Preview->SetPlacementGuide(Document->GetBuildingDefinition(), bShowPlacementGuide);
 		})]
 
 	];
@@ -308,7 +351,7 @@ void FDeepLevelCityBuildingDecorationEditor::SynchronizeOutlineSelection()
 			ExpandedOutlineItems.Add(Variant->Key());
 			for (const auto& Entry : Variant->Children)
 			{
-				if (Entry->Entry == Document->GetEntryId()) { Outline->SetSelection(Entry, ESelectInfo::Direct); return; }
+				if (Document->GetSelectedEntryIds().Contains(Entry->Entry)) { Outline->SetItemSelection(Entry, true, ESelectInfo::Direct); }
 			}
 			return;
 		}
@@ -343,7 +386,24 @@ void FDeepLevelCityBuildingDecorationEditor::OutlineClicked(TSharedPtr<FDeepLeve
 
 void FDeepLevelCityBuildingDecorationEditor::OutlineSelected(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item, ESelectInfo::Type SelectInfo)
 {
-	if (SelectInfo != ESelectInfo::Direct) { OutlineClicked(Item); }
+	if (bRefreshing || SelectInfo == ESelectInfo::Direct) { return; }
+	if (Item && Item->Kind != EDeepLevelCityDecorationOutlineKind::Entry) { OutlineClicked(Item); return; }
+	const FSoftObjectPath Building = Item ? Item->Building : Document->GetBuildingClass().ToSoftObjectPath();
+	const FGuid Variant = Item ? Item->Variant : Document->GetVariantId();
+	TArray<FGuid> Ids;
+	for (const auto& Selected : Outline->GetSelectedItems())
+	{
+		if (Selected->Kind == EDeepLevelCityDecorationOutlineKind::Entry && Selected->Building == Building && Selected->Variant == Variant)
+		{
+			Ids.Add(Selected->Entry);
+		}
+	}
+	if (Item && Ids.Remove(Item->Entry) > 0) { Ids.Add(Item->Entry); }
+	bSetSettings = false;
+	if (Document->GetBuildingClass().ToSoftObjectPath() != Building
+		&& !Document->SelectBuilding(TSoftClassPtr<AActor>(Building))) { return; }
+	if (Document->GetVariantId() != Variant) { Document->SelectVariant(Variant); }
+	Document->SelectEntries(Ids);
 }
 
 void FDeepLevelCityBuildingDecorationEditor::OutlineChildren(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item,
@@ -398,12 +458,15 @@ TSharedPtr<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu()
 		if (HasEntry())
 		{
 			Menu.AddMenuEntry(FGenericCommands::Get().Copy);
-			Menu.AddSubMenu(LOCTEXT("SymmetryMenu", "Symmetry"), LOCTEXT("SymmetryTip", "Create or manage a linked symmetric decoration"),
+			Menu.AddSubMenu(LOCTEXT("SymmetryMenu", "Symmetry"), LOCTEXT("SymmetryTip", "Preview mirrors or manage the selected links"),
 				FNewMenuDelegate::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::BuildSymmetryMenu));
-			Menu.AddMenuEntry(LOCTEXT("MoveUp", "Move up"), FText::GetEmpty(), FSlateIcon(),
-				FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->MoveEntry(-1); })));
-			Menu.AddMenuEntry(LOCTEXT("MoveDown", "Move down"), FText::GetEmpty(), FSlateIcon(),
-				FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->MoveEntry(1); })));
+			if (Document->GetSelectedEntryIds().Num() == 1)
+			{
+				Menu.AddMenuEntry(LOCTEXT("MoveUp", "Move up"), FText::GetEmpty(), FSlateIcon(),
+					FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->MoveEntry(-1); })));
+				Menu.AddMenuEntry(LOCTEXT("MoveDown", "Move down"), FText::GetEmpty(), FSlateIcon(),
+					FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->MoveEntry(1); })));
+			}
 		}
 		Menu.AddMenuEntry(FGenericCommands::Get().Paste);
 		Menu.EndSection();
@@ -414,24 +477,49 @@ TSharedPtr<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu()
 
 void FDeepLevelCityBuildingDecorationEditor::BuildSymmetryMenu(FMenuBuilder& Menu)
 {
-	if (const auto* Pair = Document->GetSymmetryPair())
+	if (Document->GetSelectedEntryIds().Num() == 1 || Document->IsSymmetryPivotSelected())
 	{
-		const FGuid Other = Pair->First == Document->GetEntryId() ? Pair->Second : Pair->First;
-		Menu.AddMenuEntry(LOCTEXT("SelectMirror", "Select other side"), FText::GetEmpty(), FSlateIcon(),
-			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this, Other] { SelectEntry(Other); })));
-		Menu.AddMenuEntry(LOCTEXT("UnlinkSymmetry", "Unlink symmetry"), LOCTEXT("UnlinkSymmetryTip", "Keep both decorations and edit them independently"), FSlateIcon(),
+		if (const auto* Pair = Document->GetSymmetryPair())
+		{
+			const FGuid Member = Pair->First;
+			Menu.AddMenuEntry(LOCTEXT("SelectSymmetryCenter", "Select symmetry center"),
+				LOCTEXT("SelectSymmetryCenterTip", "Transform both linked decorations around their midpoint."), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this, Member] { SelectSymmetryPivot(Member); })));
+			const FGuid Other = Pair->First == Document->GetEntryId() ? Pair->Second : Pair->First;
+			Menu.AddMenuEntry(LOCTEXT("SelectMirror", "Select other side"), FText::GetEmpty(), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this, Other] { SelectEntry(Other); })));
+		}
+	}
+	const bool bHasLinks = GetSymmetryPairs().ContainsByPredicate([&](const auto& Pair)
+	{ return GetSelectedEntryIds().Contains(Pair.First) || GetSelectedEntryIds().Contains(Pair.Second); });
+	if (bHasLinks)
+	{
+		Menu.AddMenuEntry(LOCTEXT("UnlinkSymmetry", "Unlink selected decorations"),
+			LOCTEXT("UnlinkSymmetryTip", "Keep the decorations and remove their selected transform links."), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->UnlinkSymmetry(); })));
 		return;
 	}
+	Menu.AddMenuEntry(LOCTEXT("PlaceMirrorAuto", "Place mirrored copies (auto plane)"),
+		LOCTEXT("PlaceMirrorAutoTip", "Move the cursor to choose a center. Ghosts preview the automatically inferred mirror plane. Click to confirm; Esc cancels."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { BeginSymmetryPlacement(); }),
+			FCanExecuteAction::CreateSPLambda(SharedThis(this), [this] { return Document->CanPlaceSymmetry(); })));
+	if (Document->GetSelectedEntryIds().Num() == 2)
+	{
+		Menu.AddMenuEntry(LOCTEXT("LinkSelectedPair", "Link the two selected decorations"),
+			LOCTEXT("LinkSelectedPairTip", "Keep both placements and create a symmetry center exactly between them."), FSlateIcon(),
+			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->LinkSelectedPair(); }),
+				FCanExecuteAction::CreateSPLambda(SharedThis(this), [this] { return Document->CanPlaceSymmetry(); })));
+	}
 	const auto AddAxis = [&](const FText& Label, EAxis::Type Axis)
 	{
-		Menu.AddMenuEntry(Label, LOCTEXT("CreateMirrorTip", "Requires a calibrated building. Creates a linked mirror around its placement center, using its local axis."), FSlateIcon(),
-			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this, Axis] { Document->CreateSymmetry(Axis); }),
-				FCanExecuteAction::CreateSPLambda(SharedThis(this), [this] { return Document->CanCreateSymmetry(); })));
+		Menu.AddMenuEntry(Label, LOCTEXT("PlaceMirrorAxisTip", "Preview all selected decorations across a locked local axis. Click to place the center."), FSlateIcon(),
+			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this, Axis] { BeginSymmetryPlacement(Axis); }),
+				FCanExecuteAction::CreateSPLambda(SharedThis(this), [this] { return Document->CanPlaceSymmetry(); })));
 	};
-	AddAxis(LOCTEXT("MirrorX", "Create linked mirror across X"), EAxis::X);
-	AddAxis(LOCTEXT("MirrorY", "Create linked mirror across Y"), EAxis::Y);
-	AddAxis(LOCTEXT("MirrorZ", "Create linked mirror across Z"), EAxis::Z);
+	AddAxis(LOCTEXT("MirrorX", "Place mirrors across X"), EAxis::X);
+	AddAxis(LOCTEXT("MirrorY", "Place mirrors across Y"), EAxis::Y);
+	AddAxis(LOCTEXT("MirrorZ", "Place mirrors across Z"), EAxis::Z);
+	if (Document->GetSelectedEntryIds().Num() != 1) { return; }
 	const auto AddExisting = [&](const FText& Label, EAxis::Type Axis)
 	{
 		Menu.AddSubMenu(Label, LOCTEXT("LinkExistingTip", "Link another decoration in this variant, keeping both placements as offsets. Assets can differ."),

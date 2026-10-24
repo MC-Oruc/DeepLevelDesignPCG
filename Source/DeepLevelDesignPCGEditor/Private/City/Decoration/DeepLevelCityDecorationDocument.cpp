@@ -223,6 +223,10 @@ void FDeepLevelCityDecorationDocument::ReconcileSelection()
 	}
 	if (!GetVariant()) { VariantId.Invalidate(); }
 	if (!GetEntry()) { EntryId.Invalidate(); }
+	SelectedEntryIds.RemoveAll([&](const FGuid& Id) { return !GetEntry(Id); });
+	if (!EntryId.IsValid()) { SelectedEntryIds.Reset(); }
+	else if (!SelectedEntryIds.Contains(EntryId)) { SelectedEntryIds = {EntryId}; }
+	if (!GetSymmetryPair()) { bSymmetryPivotSelected = false; }
 }
 
 void FDeepLevelCityDecorationDocument::SelectVariant(const FGuid& Id)
@@ -232,17 +236,54 @@ void FDeepLevelCityDecorationDocument::SelectVariant(const FGuid& Id)
 	EndDrag();
 	VariantId = Id;
 	EntryId.Invalidate();
+	SelectedEntryIds.Reset();
+	bSymmetryPivotSelected = false;
 	Notify(EDeepLevelCityDecorationChange::Variant);
 }
 
 void FDeepLevelCityDecorationDocument::SelectEntry(const FGuid& Id)
 {
+	if (Id.IsValid() && !GetEntry(Id)) { return; }
+	SelectEntries(Id.IsValid() ? MakeArrayView(&Id, 1) : TConstArrayView<FGuid>());
+}
+
+void FDeepLevelCityDecorationDocument::SelectEntries(TConstArrayView<FGuid> Ids)
+{
 	if (bClosed) { return; }
-	if (Id.IsValid() && (!Profile || !Authoring::FindEntry(*Profile, VariantId, Id))) { return; }
-	if (Id == EntryId) { return; }
+	TArray<FGuid> Valid;
+	for (const FGuid& Id : Ids) { if (GetEntry(Id)) { Valid.AddUnique(Id); } }
+	if (SelectedEntryIds == Valid && !bSymmetryPivotSelected) { return; }
 	EndDrag();
-	EntryId = Id;
+	SelectedEntryIds = MoveTemp(Valid);
+	EntryId = SelectedEntryIds.IsEmpty() ? FGuid() : SelectedEntryIds.Last();
+	bSymmetryPivotSelected = false;
 	Notify(EDeepLevelCityDecorationChange::Selection);
+}
+
+void FDeepLevelCityDecorationDocument::SelectSymmetryPivot(const FGuid& Member)
+{
+	SelectEntry(Member);
+	const auto* Pair = GetSymmetryPair();
+	if (!Pair) { return; }
+	SelectedEntryIds = {Pair->First, Pair->Second};
+	bSymmetryPivotSelected = true;
+	Notify(EDeepLevelCityDecorationChange::Selection);
+}
+
+FTransform FDeepLevelCityDecorationDocument::GetSelectionTransform() const
+{
+	if (bSymmetryPivotSelected)
+	{
+		if (const auto* Pair = GetSymmetryPair())
+		{
+			return FTransform(FRotationMatrix::MakeFromY(Pair->PlaneNormal).ToQuat(), GetSymmetryCenter(*Pair));
+		}
+	}
+	if (SelectedEntryIds.Num() == 1 && GetEntry()) { return GetEntry()->LocalTransform; }
+	FVector Center = FVector::ZeroVector;
+	for (const FGuid& Id : SelectedEntryIds) { Center += GetEntry(Id)->LocalTransform.GetLocation(); }
+	if (!SelectedEntryIds.IsEmpty()) { Center /= SelectedEntryIds.Num(); }
+	return FTransform(GetEntry() ? GetEntry()->LocalTransform.GetRotation() : FQuat::Identity, Center);
 }
 
 void FDeepLevelCityDecorationDocument::Edit(const FText& Description, EDeepLevelCityDecorationChange Change, TFunctionRef<void()> Mutation)
@@ -337,7 +378,9 @@ void FDeepLevelCityDecorationDocument::AddEntries(TConstArrayView<FDeepLevelCity
 	if (!GetVariant() || Entries.IsEmpty()) { return; }
 	Edit(LOCTEXT("AddEntries", "Add Building Decorations"), EDeepLevelCityDecorationChange::Structure, [&]
 	{
-		for (const auto& Entry : Entries) { EntryId = Authoring::AddEntry(*Profile, VariantId, Entry); }
+		SelectedEntryIds.Reset();
+		bSymmetryPivotSelected = false;
+		for (const auto& Entry : Entries) { EntryId = Authoring::AddEntry(*Profile, VariantId, Entry); SelectedEntryIds.Add(EntryId); }
 	});
 }
 
@@ -356,20 +399,103 @@ const FDeepLevelCityDecorationSymmetryPair* FDeepLevelCityDecorationDocument::Ge
 	}) : nullptr;
 }
 
+FVector FDeepLevelCityDecorationDocument::GetSymmetryCenter(const FDeepLevelCityDecorationSymmetryPair& Pair) const
+{
+	const auto* First = GetEntry(Pair.First);
+	const auto* Second = GetEntry(Pair.Second);
+	return First && Second ? (First->LocalTransform.GetLocation() + Second->LocalTransform.GetLocation()) * 0.5 : FVector::ZeroVector;
+}
+
+bool FDeepLevelCityDecorationDocument::CanPlaceSymmetry() const
+{
+	if (!CanEdit() || SelectedEntryIds.IsEmpty()) { return false; }
+	for (const auto& Pair : GetVariant()->SymmetryPairs)
+	{
+		if (SelectedEntryIds.Contains(Pair.First) || SelectedEntryIds.Contains(Pair.Second)) { return false; }
+	}
+	return true;
+}
+
 bool FDeepLevelCityDecorationDocument::CanCreateSymmetry(FGuid Target) const
 {
 	const auto* Definition = GetBuildingDefinition();
-	if (!CanEdit() || !GetEntry() || GetSymmetryPair() || !Definition || !Definition->bCalibrated) { return false; }
+	if (!CanPlaceSymmetry() || !Definition || !Definition->bCalibrated) { return false; }
 	if (!Target.IsValid()) { return true; }
-	return Target != EntryId && GetEntry(Target) && !GetVariant()->SymmetryPairs.ContainsByPredicate([&](const auto& Pair)
+	return SelectedEntryIds.Num() == 1 && Target != EntryId && GetEntry(Target)
+		&& !GetVariant()->SymmetryPairs.ContainsByPredicate([&](const auto& Pair) { return Pair.First == Target || Pair.Second == Target; });
+}
+
+bool FDeepLevelCityDecorationDocument::BuildSymmetryPreview(const FVector& Center, const FVector& Normal,
+	TArray<FDeepLevelCityBuildingDecorationEntry>& Copies, FText& Error) const
+{
+	Copies.Reset();
+	if (!CanPlaceSymmetry() || Center.ContainsNaN() || Normal.ContainsNaN() || !Normal.IsNormalized())
 	{
-		return Pair.First == Target || Pair.Second == Target;
+		Error = LOCTEXT("CannotPreviewSymmetry", "Select unlinked decorations and a valid symmetry center.");
+		return false;
+	}
+	FDeepLevelCityDecorationSymmetryPair Pair;
+	Pair.PlaneOrigin = Center;
+	Pair.PlaneNormal = Normal;
+	for (const FGuid& Id : SelectedEntryIds)
+	{
+		auto Copy = *GetEntry(Id);
+		Copy.Name = FName(*(Copy.Name.ToString() + TEXT("_Mirror")));
+		Copy.LocalTransform = Pair.GetMirroredTransform(Copy.LocalTransform);
+		if (!DeepLevelCityDecorationValidation::ValidateTransform(Copy.LocalTransform, Error)) { Copies.Reset(); return false; }
+		Copies.Add(MoveTemp(Copy));
+	}
+	return true;
+}
+
+bool FDeepLevelCityDecorationDocument::CreateSymmetryAt(const FVector& Center, const FVector& Normal, FText& Error)
+{
+	TArray<FDeepLevelCityBuildingDecorationEntry> Copies;
+	if (!BuildSymmetryPreview(Center, Normal, Copies, Error)) { return false; }
+	Edit(LOCTEXT("PlaceSymmetry", "Place Symmetric Decorations"), EDeepLevelCityDecorationChange::Structure, [&]
+	{
+		for (const auto& Copy : Copies)
+		{
+			FDeepLevelCityDecorationSymmetryPair Pair;
+			Pair.First = Copy.EntryGuid;
+			Pair.Second = Authoring::AddEntry(*Profile, VariantId, Copy);
+			Pair.PlaneOrigin = Center;
+			Pair.PlaneNormal = Normal;
+			Authoring::FindVariant(*Profile, VariantId)->SymmetryPairs.Add(Pair);
+		}
 	});
+	if (Copies.Num() == 1) { SelectSymmetryPivot(Copies[0].EntryGuid); }
+	return true;
+}
+
+bool FDeepLevelCityDecorationDocument::LinkSelectedPair()
+{
+	if (!CanPlaceSymmetry() || SelectedEntryIds.Num() != 2) { return false; }
+	FDeepLevelCityDecorationSymmetryPair Pair;
+	Pair.First = SelectedEntryIds[0];
+	Pair.Second = SelectedEntryIds[1];
+	Pair.PlaneOrigin = GetSymmetryCenter(Pair);
+	Pair.PlaneNormal = (GetEntry(Pair.Second)->LocalTransform.GetLocation() - GetEntry(Pair.First)->LocalTransform.GetLocation()).GetSafeNormal();
+	Pair.CaptureOffsets(GetEntry(Pair.First)->LocalTransform, GetEntry(Pair.Second)->LocalTransform);
+	if (!Pair.HasValidSettings()) { return false; }
+	Edit(LOCTEXT("LinkSelection", "Link Selected Decorations"), EDeepLevelCityDecorationChange::Structure, [&]
+	{
+		Authoring::FindVariant(*Profile, VariantId)->SymmetryPairs.Add(Pair);
+	});
+	SelectSymmetryPivot(Pair.First);
+	return true;
 }
 
 bool FDeepLevelCityDecorationDocument::CreateSymmetry(EAxis::Type Axis, FGuid Target)
 {
 	if (!CanCreateSymmetry(Target) || (Axis != EAxis::X && Axis != EAxis::Y && Axis != EAxis::Z)) { return false; }
+	if (!Target.IsValid() && SelectedEntryIds.Num() > 1)
+	{
+		FText Error;
+		const auto& Volume = GetBuildingDefinition()->PlacementVolume;
+		const FVector Direction = Axis == EAxis::X ? FVector::ForwardVector : Axis == EAxis::Y ? FVector::RightVector : FVector::UpVector;
+		return CreateSymmetryAt(Volume.Center, Volume.Rotation.RotateVector(Direction), Error);
+	}
 	const auto Source = *GetEntry();
 	const auto& Volume = GetBuildingDefinition()->PlacementVolume;
 	FDeepLevelCityDecorationSymmetryPair Pair;
@@ -386,6 +512,9 @@ bool FDeepLevelCityDecorationDocument::CreateSymmetry(EAxis::Type Axis, FGuid Ta
 		Pair.CaptureOffsets(Source.LocalTransform, GetEntry(Target)->LocalTransform);
 		if (!Pair.HasValidSettings()) { return false; }
 	}
+	const FTransform TargetTransform = Target.IsValid() ? GetEntry(Target)->LocalTransform : Copy.LocalTransform;
+	Pair.PlaneOrigin = (Source.LocalTransform.GetLocation() + TargetTransform.GetLocation()) * 0.5;
+	Pair.CaptureOffsets(Source.LocalTransform, TargetTransform);
 	Edit(LOCTEXT("CreateSymmetry", "Create Linked Symmetric Decoration"), EDeepLevelCityDecorationChange::Structure, [&]
 	{
 		if (!Target.IsValid()) { Pair.Second = Authoring::AddEntry(*Profile, VariantId, Copy); }
@@ -396,13 +525,13 @@ bool FDeepLevelCityDecorationDocument::CreateSymmetry(EAxis::Type Axis, FGuid Ta
 
 void FDeepLevelCityDecorationDocument::UnlinkSymmetry()
 {
-	if (!GetSymmetryPair()) { return; }
+	if (!GetVariant() || !GetVariant()->SymmetryPairs.ContainsByPredicate([&](const auto& Pair)
+		{ return SelectedEntryIds.Contains(Pair.First) || SelectedEntryIds.Contains(Pair.Second); })) { return; }
 	Edit(LOCTEXT("UnlinkSymmetry", "Unlink Decoration Symmetry"), EDeepLevelCityDecorationChange::Metadata, [&]
 	{
 		Authoring::FindVariant(*Profile, VariantId)->SymmetryPairs.RemoveAll([&](const auto& Pair)
-		{
-			return Pair.First == EntryId || Pair.Second == EntryId;
-		});
+		{ return SelectedEntryIds.Contains(Pair.First) || SelectedEntryIds.Contains(Pair.Second); });
+		bSymmetryPivotSelected = false;
 	});
 }
 
@@ -453,10 +582,8 @@ bool FDeepLevelCityDecorationDocument::ValidateLinkedTransform(const FTransform&
 
 void FDeepLevelCityDecorationDocument::BroadcastTransformChange()
 {
-	const auto* Pair = GetSymmetryPair();
-	const FGuid Other = Pair ? (Pair->First == EntryId ? Pair->Second : Pair->First) : FGuid();
-	OnChanged.Broadcast(EDeepLevelCityDecorationChange::Transform, EntryId);
-	if (Other.IsValid()) { OnChanged.Broadcast(EDeepLevelCityDecorationChange::Transform, Other); }
+	// One aggregate notification keeps group edits atomic for the inspector and preview.
+	OnChanged.Broadcast(EDeepLevelCityDecorationChange::Transform, FGuid());
 }
 
 bool FDeepLevelCityDecorationDocument::CommitVariants(const TArray<FDeepLevelCityBuildingDecorationVariant>& Variants, FText& Error)
@@ -471,25 +598,67 @@ bool FDeepLevelCityDecorationDocument::CommitVariants(const TArray<FDeepLevelCit
 	return true;
 }
 
+void FDeepLevelCityDecorationDocument::AddSelectionCopies(TConstArrayView<FDeepLevelCityBuildingDecorationEntry> Entries,
+	TConstArrayView<FDeepLevelCityDecorationSymmetryPair> Pairs)
+{
+	if (!GetVariant() || Entries.IsEmpty()) { return; }
+	Edit(LOCTEXT("CopyEntries", "Duplicate Building Decorations"), EDeepLevelCityDecorationChange::Structure, [&]
+	{
+		TMap<FGuid, FGuid> Remap;
+		SelectedEntryIds.Reset();
+		bSymmetryPivotSelected = false;
+		for (const auto& Entry : Entries)
+		{
+			auto Copy = Entry;
+			Copy.Name = FName(*(Entry.Name.ToString() + TEXT("_Copy")));
+			EntryId = Authoring::AddEntry(*Profile, VariantId, Copy);
+			Remap.Add(Entry.EntryGuid, EntryId);
+			SelectedEntryIds.Add(EntryId);
+		}
+		for (auto Pair : Pairs)
+		{
+			if (!Remap.Contains(Pair.First) || !Remap.Contains(Pair.Second)) { continue; }
+			Pair.First = Remap.FindChecked(Pair.First);
+			Pair.Second = Remap.FindChecked(Pair.Second);
+			Authoring::FindVariant(*Profile, VariantId)->SymmetryPairs.Add(Pair);
+		}
+	});
+}
+
 void FDeepLevelCityDecorationDocument::DuplicateEntry()
 {
-	if (!GetEntry()) { return; }
-	Edit(LOCTEXT("DuplicateEntry", "Duplicate Building Decoration"), EDeepLevelCityDecorationChange::Structure,
-		[&] { EntryId = Authoring::DuplicateEntry(*Profile, VariantId, EntryId); });
+	TArray<FDeepLevelCityBuildingDecorationEntry> Entries;
+	for (const FGuid& Id : SelectedEntryIds) { if (GetEntry(Id)) { Entries.Add(*GetEntry(Id)); } }
+	const auto Pairs = GetVariant() ? GetVariant()->SymmetryPairs : TArray<FDeepLevelCityDecorationSymmetryPair>();
+	AddSelectionCopies(Entries, Pairs);
 }
 
 void FDeepLevelCityDecorationDocument::RemoveEntry()
 {
 	if (!GetEntry()) { return; }
-	Edit(LOCTEXT("RemoveEntry", "Remove Building Decoration"), EDeepLevelCityDecorationChange::Structure, [&]
+	const auto Ids = SelectedEntryIds;
+	Edit(LOCTEXT("RemoveEntry", "Remove Building Decorations"), EDeepLevelCityDecorationChange::Structure, [&]
 	{
-		Authoring::RemoveEntry(*Profile, VariantId, EntryId);
+		for (const FGuid& Id : Ids) { Authoring::RemoveEntry(*Profile, VariantId, Id); }
 		EntryId.Invalidate();
+		SelectedEntryIds.Reset();
+		bSymmetryPivotSelected = false;
 	});
 }
 
-void FDeepLevelCityDecorationDocument::CopyEntry() { if (const auto* Entry = GetEntry()) { Clipboard = *Entry; } }
-void FDeepLevelCityDecorationDocument::PasteEntry() { if (Clipboard.IsSet()) { AddEntries(MakeArrayView(&Clipboard.GetValue(), 1)); } }
+void FDeepLevelCityDecorationDocument::CopyEntry()
+{
+	Clipboard.Reset();
+	ClipboardPairs.Reset();
+	for (const FGuid& Id : SelectedEntryIds) { if (GetEntry(Id)) { Clipboard.Add(*GetEntry(Id)); } }
+	if (!GetVariant()) { return; }
+	for (const auto& Pair : GetVariant()->SymmetryPairs)
+	{
+		if (SelectedEntryIds.Contains(Pair.First) && SelectedEntryIds.Contains(Pair.Second)) { ClipboardPairs.Add(Pair); }
+	}
+}
+
+void FDeepLevelCityDecorationDocument::PasteEntry() { AddSelectionCopies(Clipboard, ClipboardPairs); }
 
 void FDeepLevelCityDecorationDocument::MoveEntry(int32 Direction)
 {
@@ -561,23 +730,85 @@ bool FDeepLevelCityDecorationDocument::SetTransform(const FTransform& Transform,
 
 void FDeepLevelCityDecorationDocument::ApplyDragTransform(const FTransform& Transform)
 {
-	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || !CanEdit() || !GetEntry()) { return; }
+	if (!GetEntry() || !CanEdit()) { return; }
 	FText Error;
 	if (!DeepLevelCityDecorationValidation::ValidateTransform(Transform, Error) || !ValidateLinkedTransform(Transform, Error)) { return; }
-	if (GetEntry()->LocalTransform.Equals(Transform)) { return; }
+	auto Candidate = *GetVariant();
+	auto* Changed = Candidate.Entries.FindByPredicate([&](const auto& Item) { return Item.EntryGuid == EntryId; });
+	Changed->LocalTransform = Transform;
+	if (const auto* Pair = GetSymmetryPair())
+	{
+		auto* Other = Candidate.Entries.FindByPredicate([&](const auto& Item) { return Item.EntryGuid == (Pair->First == EntryId ? Pair->Second : Pair->First); });
+		Other->LocalTransform = Pair->SynchronizeTransform(Transform, Other->LocalTransform, Pair->First == EntryId);
+	}
+	ApplyDragVariant(MoveTemp(Candidate));
+}
+
+void FDeepLevelCityDecorationDocument::ApplySelectionDelta(const FVector& Drag, const FRotator& Rotation, const FVector& Scale, const FQuat& ScaleBasis)
+{
+	if (!CanEdit() || !GetEntry()) { return; }
+	if (SelectedEntryIds.Num() == 1 && !bSymmetryPivotSelected)
+	{
+		ApplyDragTransform(Authoring::ApplyTransformDelta(GetEntry()->LocalTransform, Drag, Rotation, Scale));
+		return;
+	}
+	const FVector Pivot = GetSelectionTransform().GetLocation();
+	const FQuat Turn = Rotation.Quaternion();
+	const FVector Factor = FVector::OneVector + Scale;
+	if (FMath::Abs(Factor.X) < 0.001 || FMath::Abs(Factor.Y) < 0.001 || FMath::Abs(Factor.Z) < 0.001) { return; }
+	auto Candidate = *GetVariant();
+	TArray<FGuid> Moving = SelectedEntryIds;
+	if (bSymmetryPivotSelected)
+	{
+		const auto* Pair = GetSymmetryPair();
+		Moving = {Pair->First, Pair->Second};
+	}
+	const auto MovePoint = [&](const FVector& Point) { return Pivot + Drag + Turn.RotateVector(ScaleBasis.RotateVector(ScaleBasis.UnrotateVector(Point - Pivot) * Factor)); };
+	for (auto& Entry : Candidate.Entries)
+	{
+		if (!Moving.Contains(Entry.EntryGuid)) { continue; }
+		Entry.LocalTransform.SetLocation(MovePoint(Entry.LocalTransform.GetLocation()));
+		Entry.LocalTransform.SetRotation((Turn * Entry.LocalTransform.GetRotation()).GetNormalized());
+		Entry.LocalTransform.SetScale3D(Entry.LocalTransform.GetScale3D() * Factor);
+	}
+	for (auto& Pair : Candidate.SymmetryPairs)
+	{
+		const bool bFirst = Moving.Contains(Pair.First), bSecond = Moving.Contains(Pair.Second);
+		if (!bFirst && !bSecond) { continue; }
+		auto* First = Candidate.Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Pair.First; });
+		auto* Second = Candidate.Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Pair.Second; });
+		if (bFirst && bSecond)
+		{
+			Pair.PlaneOrigin = MovePoint(Pair.PlaneOrigin);
+			Pair.PlaneNormal = Turn.RotateVector(ScaleBasis.RotateVector(ScaleBasis.UnrotateVector(Pair.PlaneNormal) / Factor)).GetSafeNormal();
+			Pair.CaptureOffsets(First->LocalTransform, Second->LocalTransform);
+		}
+		else if (bFirst) { Second->LocalTransform = Pair.SynchronizeTransform(First->LocalTransform, Second->LocalTransform, true); }
+		else { First->LocalTransform = Pair.SynchronizeTransform(Second->LocalTransform, First->LocalTransform, false); }
+	}
+	ApplyDragVariant(MoveTemp(Candidate));
+}
+
+void FDeepLevelCityDecorationDocument::ApplyDragVariant(FDeepLevelCityBuildingDecorationVariant&& Candidate)
+{
+	if (EditMode == EDeepLevelCityDecorationEditMode::Staging || !CanEdit()) { return; }
+	FText Error;
+	for (const auto& Entry : Candidate.Entries)
+	{
+		if (!DeepLevelCityDecorationValidation::ValidateTransform(Entry.LocalTransform, Error)) { return; }
+	}
+	if (!Candidate.HasValidSymmetry()) { return; }
+	const auto* Schema = FDeepLevelCityBuildingDecorationVariant::StaticStruct();
+	if (Schema->CompareScriptStruct(&Candidate, GetVariant(), 0)) { return; }
 	if (!bDragging)
 	{
 		bDragging = true;
-		DragStart = GetEntry()->LocalTransform;
+		DragStart = *GetVariant();
 		bDirtyBeforeDrag = Profile->GetOutermost()->IsDirty();
-	}
-	if (!DragTransaction)
-	{
-		DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("Drag", "Transform Building Decoration"));
+		DragTransaction = MakeUnique<FScopedTransaction>(LOCTEXT("Drag", "Transform Building Decorations"));
 		Profile->Modify();
 	}
-	MutableEntry()->LocalTransform = Transform;
-	SynchronizeSymmetryTransform();
+	*Authoring::FindVariant(*Profile, VariantId) = MoveTemp(Candidate);
 	BroadcastTransformChange();
 }
 
@@ -586,7 +817,7 @@ void FDeepLevelCityDecorationDocument::EndDrag(bool bNotify, bool bExternalEdit)
 	if (!bDragging) { return; }
 	bDragging = false;
 	if (!DragTransaction) { return; }
-	const bool bChanged = GetEntry() && !GetEntry()->LocalTransform.Equals(DragStart);
+	const bool bChanged = GetVariant() && !FDeepLevelCityBuildingDecorationVariant::StaticStruct()->CompareScriptStruct(&DragStart, GetVariant(), 0);
 	if (!bChanged)
 	{
 		DragTransaction->Cancel();

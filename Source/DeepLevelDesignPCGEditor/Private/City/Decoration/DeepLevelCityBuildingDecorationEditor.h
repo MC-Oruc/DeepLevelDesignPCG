@@ -48,6 +48,17 @@ public:
 };
 
 UCLASS()
+class UDeepLevelCityDecorationSelectionProxy : public UObject
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(VisibleAnywhere, Category = "Selection")
+	int32 DecorationCount = 0;
+	UPROPERTY(EditAnywhere, Category = "Selection")
+	FTransform Transform;
+};
+
+UCLASS()
 class UDeepLevelCityDecorationBuildingProxy : public UObject
 {
 	GENERATED_BODY()
@@ -104,6 +115,12 @@ struct FDeepLevelCityDecorationOutlineItem
 	FString Key() const { return Building.ToString() + Variant.ToString() + Entry.ToString(); }
 };
 
+struct FDeepLevelCityDecorationViewportShortcut
+{
+	FText Key;
+	FText Action;
+};
+
 class FDeepLevelCityBuildingDecorationEditor final : public FAssetEditorToolkit, public FGCObject
 {
 public:
@@ -122,12 +139,32 @@ public:
 
 	const FDeepLevelCityBuildingDecorationEntry* GetSelectedEntry() const { return Document->GetEntry(); }
 	FGuid GetSelectedEntryId() const { return Document->GetEntryId(); }
-	void SelectEntry(const FGuid& Id);
+	void SelectEntry(const FGuid& Id, bool bToggle = false, bool bAdd = false);
+	void SelectSymmetryPivot(const FGuid& Id) { bSetSettings = false; Document->SelectSymmetryPivot(Id); }
+	bool IsSymmetryPivotSelected() const { return Document->IsSymmetryPivotSelected(); }
+	const TArray<FGuid>& GetSelectedEntryIds() const { return Document->GetSelectedEntryIds(); }
+	FTransform GetSelectionTransform() const { return Document->GetSelectionTransform(); }
+	TConstArrayView<FDeepLevelCityDecorationSymmetryPair> GetSymmetryPairs() const;
+	FVector GetSymmetryCenter(const FDeepLevelCityDecorationSymmetryPair& Pair) const { return Document->GetSymmetryCenter(Pair); }
+	void BeginSymmetryPlacement(EAxis::Type Axis = EAxis::None);
+	bool UpdateSymmetryPlacement(const FVector& Center, const FSceneView* View = nullptr, bool bFreeAxis = false);
+	void ToggleSymmetryPlacementAxis(EAxis::Type Axis);
+	void RefreshSymmetryPlacement();
+	FQuat GetSymmetryPlacementBasis() const;
+	EAxis::Type GetSymmetrySnappedAxis() const { return SymmetrySnappedAxis; }
+	FDeepLevelCityDecorationViewportShortcut GetViewportShortcut(int32 Row) const;
+	FText GetViewportStatus() const;
+	bool CommitSymmetryPlacement();
+	void CancelSymmetryPlacement();
+	bool IsPlacingSymmetry() const { return SymmetryPlacementAxis.IsSet(); }
+	bool HasSymmetryPreview() const { return SymmetryPlacementCenter.IsSet(); }
+	FVector GetSymmetryPlacementCenter() const { return SymmetryPlacementCenter.Get(FVector::ZeroVector); }
+	FVector GetSymmetryPlacementNormal() const { return SymmetryPlacementNormal; }
 	void ApplyWidgetDelta(const FVector& Drag, const FRotator& Rotation, const FVector& Scale, const FHitResult* SurfaceHit = nullptr);
 	void EndWidgetDrag() { Document->EndDrag(); }
 	void PlaceSelectedOnSurface(const FVector& Location, const FVector& Normal);
 	bool AddDroppedAssets(const TArray<FAssetData>& Assets, const FVector& Location, const FVector& Normal);
-	bool CanTransformSelection() const { return HasEntry(); }
+	bool CanTransformSelection() const { return HasEntry() && !IsPlacingSymmetry(); }
 	const FDeepLevelCityDecorationSymmetryPair* GetSelectedSymmetryPair() const { return Document->GetSymmetryPair(); }
 	const FDeepLevelCityBuildingDecorationEntry* GetDecoration(const FGuid& Id) const { return Document->GetEntry(Id); }
 	bool IsSurfacePlacementEnabled() const;
@@ -144,11 +181,15 @@ private:
 	friend class FDeepLevelCityDecorationSymmetryPreviewTest;
 	friend class FDeepLevelCityDecorationViewportSelectionTest;
 	friend class FDeepLevelCityDecorationFlexibleLinkInspectorTest;
+	friend class FDeepLevelCityDecorationMultiSelectionPreviewTest;
+	friend class FDeepLevelCityDecorationSymmetryPlacementTest;
+	friend class FDeepLevelCityDecorationSymmetrySnappingTest;
 #endif
 	TSharedRef<SDockTab> SpawnWorkspace(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnEnvironment(const FSpawnTabArgs& Args);
 	TSharedRef<SWidget> BuildWorkspace();
 	TSharedRef<SWidget> BuildViewportControls();
+	TSharedRef<SWidget> BuildViewportOverlay();
 	void DocumentChanged(EDeepLevelCityDecorationChange Change, FGuid Entry);
 	void RefreshOutline();
 	void SynchronizeOutlineSelection();
@@ -180,18 +221,20 @@ private:
 	FText GetStatusText() const;
 	FString GetSetPath() const;
 	FString GetCatalogPath() const;
-	bool CanEdit() const { return Document->CanEdit(); }
+	bool CanEdit() const { return Document->CanEdit() && !IsPlacingSymmetry(); }
 	bool HasVariant() const { return CanEdit() && Document->GetVariant(); }
 	bool HasEntry() const { return CanEdit() && Document->GetEntry(); }
 	bool CanCreateProfile() const { return Document->CanCreateProfile(); }
-	bool CanEditInspector() const { return bSetSettings ? Document->GetSet() != nullptr : CanEdit(); }
+	bool CanEditInspector() const { return !IsPlacingSymmetry() && (bSetSettings ? Document->GetSet() != nullptr : CanEdit()); }
 
 	TUniquePtr<FDeepLevelCityDecorationDocument> Document;
 	TObjectPtr<UDeepLevelCityDecorationVariantProxy> VariantProxy;
 	TObjectPtr<UDeepLevelCityDecorationEntryProxy> EntryProxy;
+	TObjectPtr<UDeepLevelCityDecorationSelectionProxy> SelectionProxy;
 	TObjectPtr<UDeepLevelCityDecorationBuildingProxy> BuildingProxy;
 	TObjectPtr<UDeepLevelCityDecorationSetProxy> SetProxy;
 	FDeepLevelCityBuildingDecorationEntry InspectorBaseline;
+	FTransform SelectionBaseline;
 	TSharedPtr<IDetailsView> Inspector;
 	TSharedPtr<SDeepLevelCityBuildingDecorationViewport> Preview;
 	TArray<TSharedPtr<FDeepLevelCityDecorationOutlineItem>> OutlineItems;
@@ -205,6 +248,11 @@ private:
 	bool bRefreshing = false;
 	bool bSetSettings = false;
 	bool bShowPlacementGuide = false;
+	TOptional<EAxis::Type> SymmetryPlacementAxis;
+	TOptional<FVector> SymmetryPlacementCenter;
+	FVector SymmetryPlacementNormal = FVector::ZeroVector;
+	EAxis::Type SymmetrySnappedAxis = EAxis::None;
+	bool bSymmetryFreeAxis = false;
 	static const FName WorkspaceTab;
 	static const FName EnvironmentTab;
 };
@@ -215,14 +263,20 @@ public:
 	FDeepLevelCityBuildingDecorationViewportClient(const TSharedRef<FAdvancedPreviewScene>& Scene, const TSharedRef<SEditorViewport>& Widget,
 		TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Editor);
 	virtual void Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI) override;
+	virtual void DrawCanvas(FViewport& Viewport, FSceneView& View, FCanvas& Canvas) override;
 	virtual FVector GetWidgetLocation() const override;
 	virtual UE::Widget::EWidgetMode GetWidgetMode() const override;
+	virtual bool CanSetWidgetMode(UE::Widget::EWidgetMode NewMode) const override;
 	virtual FMatrix GetWidgetCoordSystem() const override;
 	virtual FMatrix GetLocalCoordinateSystem() const override { return GetWidgetCoordSystem(); }
 	virtual bool InputWidgetDelta(FViewport* Viewport, EAxisList::Type Axis, FVector& Drag, FRotator& Rotation, FVector& Scale) override;
 	virtual void TrackingStopped() override;
 	virtual void ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 X, uint32 Y) override;
+	virtual void MouseMove(FViewport* Viewport, int32 X, int32 Y) override;
+	virtual bool InputKey(const FInputKeyEventArgs& EventArgs) override;
+	virtual void LostFocus(FViewport* Viewport) override;
 	bool TraceBuilding(FSceneView& View, int32 X, int32 Y, FHitResult& Hit) const;
+	bool UpdateSymmetryCursor(FSceneView& View, int32 X, int32 Y);
 private:
 	TSharedRef<FAdvancedPreviewScene> SceneOwner;
 	TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Editor;
@@ -237,10 +291,17 @@ public:
 	void Construct(const FArguments& Args);
 	virtual ~SDeepLevelCityBuildingDecorationViewport() override;
 	void Synchronize(const TSoftClassPtr<AActor>& BuildingClass, const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId);
-	void SetPlacementGuide(const FDeepLevelBuildingPlacementDefinition* Definition);
+	void SetPlacementGuide(const FDeepLevelBuildingPlacementDefinition* Definition, bool bShowBounds = true);
+	void DrawExposureLabels(const FSceneView* View, FCanvas* Canvas) const;
 	AActor* GetEntryActor(const FGuid& Id) const;
 	void UpdateEntry(const FGuid& Id, const FTransform& Transform);
-	void DrawSelection(FPrimitiveDrawInterface* PDI, const FGuid& Id) const;
+	void DrawSelection(FPrimitiveDrawInterface* PDI, TConstArrayView<FGuid> Ids) const;
+	bool SetSymmetryPreview(TConstArrayView<FDeepLevelCityBuildingDecorationEntry> Copies);
+	void ClearSymmetryPreview();
+	int32 GetSymmetryPreviewCount() const { return SymmetryPreviewActors.Num(); }
+	AActor* GetSymmetryPreviewActor(const FGuid& Source) const;
+	void DrawSymmetryPreview(FPrimitiveDrawInterface* PDI) const;
+	void DrawSymmetryAxisLabels(const FSceneView* View, FCanvas* Canvas) const;
 	FGuid FindEntryForActor(const AActor* Actor) const;
 	AActor* GetBuildingActor() const { return BuildingActor.Get(); }
 	bool TraceSurface(const FVector& Start, const FVector& End, FHitResult& Hit) const;
@@ -265,6 +326,9 @@ private:
 	TMap<FGuid, TWeakObjectPtr<AActor>> DecorationActors;
 	TMap<FGuid, FDeepLevelCityDecorationSurface> DecorationSurfaces;
 	TMap<FGuid, FDeepLevelCityBuildingDecorationEntry> PreviewEntries;
+	TMap<FGuid, TWeakObjectPtr<AActor>> SymmetryPreviewActors;
+	TArray<FDeepLevelCityBuildingDecorationEntry> SymmetryPreviewEntries;
 	TOptional<FDeepLevelBuildingPlacementVolume> PlacementGuide;
+	bool bDrawPlacementBounds = true;
 	FDeepLevelCityDecorationSurface Surface;
 };

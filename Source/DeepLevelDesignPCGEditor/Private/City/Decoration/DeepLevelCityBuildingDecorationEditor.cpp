@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 #include "City/Decoration/DeepLevelCityBuildingDecorationEditor.h"
 #include "City/Decoration/DeepLevelCityDecorationAuthoring.h"
+#include "City/Decoration/DeepLevelCityDecorationValidation.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetToolsModule.h"
 #include "Editor.h"
@@ -47,6 +48,7 @@ void FDeepLevelCityBuildingDecorationEditor::InitEditor(EToolkitMode::Type Mode,
 	Document->Open(Set);
 	VariantProxy = NewObject<UDeepLevelCityDecorationVariantProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	EntryProxy = NewObject<UDeepLevelCityDecorationEntryProxy>(GetTransientPackage(), NAME_None, RF_Transient);
+	SelectionProxy = NewObject<UDeepLevelCityDecorationSelectionProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	BuildingProxy = NewObject<UDeepLevelCityDecorationBuildingProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	SetProxy = NewObject<UDeepLevelCityDecorationSetProxy>(GetTransientPackage(), NAME_None, RF_Transient);
 	FDetailsViewArgs Args;
@@ -106,6 +108,7 @@ void FDeepLevelCityBuildingDecorationEditor::AddReferencedObjects(FReferenceColl
 {
 	Collector.AddReferencedObject(VariantProxy);
 	Collector.AddReferencedObject(EntryProxy);
+	Collector.AddReferencedObject(SelectionProxy);
 	Collector.AddReferencedObject(BuildingProxy);
 	Collector.AddReferencedObject(SetProxy);
 }
@@ -122,9 +125,13 @@ TSharedRef<SDockTab> FDeepLevelCityBuildingDecorationEditor::SpawnEnvironment(co
 
 void FDeepLevelCityBuildingDecorationEditor::DocumentChanged(EDeepLevelCityDecorationChange Change, FGuid Entry)
 {
+	CancelSymmetryPlacement();
 	if (Document->IsDragging() && Change == EDeepLevelCityDecorationChange::Transform)
 	{
-		if (const auto* Changed = Document->GetEntry(Entry)) { Preview->UpdateEntry(Entry, Changed->LocalTransform); }
+		if (const auto* Variant = Document->GetVariant())
+		{
+			for (const auto& Changed : Variant->Entries) { Preview->UpdateEntry(Changed.EntryGuid, Changed.LocalTransform); }
+		}
 		return;
 	}
 	TGuardValue<bool> Guard(bRefreshing, true);
@@ -137,15 +144,18 @@ void FDeepLevelCityBuildingDecorationEditor::DocumentChanged(EDeepLevelCityDecor
 	if (Change != EDeepLevelCityDecorationChange::Selection && Change != EDeepLevelCityDecorationChange::Transform) { RefreshOutline(); }
 	RefreshInspector();
 	SynchronizeOutlineSelection();
+	Preview->SetPlacementGuide(Document->GetBuildingDefinition(), bShowPlacementGuide);
 	if (Change == EDeepLevelCityDecorationChange::Transform)
 	{
-		if (const auto* Changed = Document->GetEntry(Entry)) { Preview->UpdateEntry(Entry, Changed->LocalTransform); }
+		if (const auto* Variant = Document->GetVariant())
+		{
+			for (const auto& Changed : Variant->Entries) { Preview->UpdateEntry(Changed.EntryGuid, Changed.LocalTransform); }
+		}
 	}
 	else if (Change != EDeepLevelCityDecorationChange::Selection && Change != EDeepLevelCityDecorationChange::Metadata)
 	{
 		Preview->Synchronize(Document->GetBuildingClass(), Document->GetProfile(), Document->GetVariantId());
 	}
-	Preview->SetPlacementGuide(bShowPlacementGuide ? Document->GetBuildingDefinition() : nullptr);
 	Preview->GetClient()->Invalidate();
 	RefreshIssues();
 }
@@ -158,6 +168,12 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshInspector()
 		SetProxy->Categories = Document->GetSet()->Categories;
 		SetProxy->BuildingProfiles = Document->GetSet()->BuildingProfiles;
 		Object = SetProxy;
+	}
+	else if (Document->IsSymmetryPivotSelected() || Document->GetSelectedEntryIds().Num() > 1)
+	{
+		SelectionProxy->DecorationCount = Document->IsSymmetryPivotSelected() ? 2 : Document->GetSelectedEntryIds().Num();
+		SelectionProxy->Transform = SelectionBaseline = Document->GetSelectionTransform();
+		Object = SelectionProxy;
 	}
 	else if (const auto* Entry = Document->GetEntry())
 	{
@@ -194,6 +210,18 @@ void FDeepLevelCityBuildingDecorationEditor::CommitInspector(const FPropertyChan
 	if (bSetSettings)
 	{
 		if (Event.GetMemberPropertyName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationSetProxy, Categories)) { Document->SetCategories(SetProxy->Categories); }
+	}
+	else if (Document->IsSymmetryPivotSelected() || Document->GetSelectedEntryIds().Num() > 1)
+	{
+		const FTransform Desired = SelectionProxy->Transform;
+		if (DeepLevelCityDecorationValidation::ValidateTransform(Desired, Error))
+		{
+			Document->ApplySelectionDelta(Desired.GetLocation() - SelectionBaseline.GetLocation(),
+				(Desired.GetRotation() * SelectionBaseline.GetRotation().Inverse()).Rotator(),
+				Desired.GetScale3D() / SelectionBaseline.GetScale3D() - FVector::OneVector);
+			Document->EndDrag();
+		}
+		else { OperationError = Error; RefreshInspector(); }
 	}
 	else if (Document->GetEntry())
 	{
@@ -301,16 +329,24 @@ bool FDeepLevelCityBuildingDecorationEditor::AddDroppedAssets(const TArray<FAsse
 	return true;
 }
 
-void FDeepLevelCityBuildingDecorationEditor::SelectEntry(const FGuid& Id)
+void FDeepLevelCityBuildingDecorationEditor::SelectEntry(const FGuid& Id, bool bToggle, bool bAdd)
 {
 	bSetSettings = false;
-	Document->SelectEntry(Id);
+	if ((bToggle || bAdd) && Id.IsValid())
+	{
+		auto Ids = Document->GetSelectedEntryIds();
+		if (bToggle && Ids.Contains(Id)) { Ids.Remove(Id); }
+		else { Ids.Remove(Id); Ids.Add(Id); }
+		Document->SelectEntries(Ids);
+	}
+	else if (!bToggle && !bAdd) { Document->SelectEntry(Id); }
 	RefreshInspector();
 }
 
 bool FDeepLevelCityBuildingDecorationEditor::IsSurfacePlacementEnabled() const
 {
-	return GetDefault<ULevelEditorViewportSettings>()->SnapToSurface.bEnabled && Document->CanEdit();
+	return GetDefault<ULevelEditorViewportSettings>()->SnapToSurface.bEnabled && Document->CanEdit()
+		&& !Document->IsSymmetryPivotSelected() && Document->GetSelectedEntryIds().Num() == 1;
 }
 
 void FDeepLevelCityBuildingDecorationEditor::ApplyWidgetDelta(const FVector& Drag, const FRotator& Rotation,
@@ -318,6 +354,13 @@ void FDeepLevelCityBuildingDecorationEditor::ApplyWidgetDelta(const FVector& Dra
 {
 	const auto* Entry = Document->GetEntry();
 	if (!Entry) { return; }
+	if (Document->IsSymmetryPivotSelected() || Document->GetSelectedEntryIds().Num() > 1)
+	{
+		const FQuat ScaleBasis = Preview->GetClient()->GetWidgetCoordSystemSpace() == COORD_Local
+			? Document->GetSelectionTransform().GetRotation() : FQuat::Identity;
+		Document->ApplySelectionDelta(Drag, Rotation, Scale, ScaleBasis);
+		return;
+	}
 	FTransform Transform = DeepLevelCityDecorationAuthoring::ApplyTransformDelta(Entry->LocalTransform, Drag, Rotation, Scale);
 	if (SurfaceHit && !Preview->GetSurfacePlacementTransform(Entry->EntryGuid, Transform,
 		SurfaceHit->ImpactPoint, SurfaceHit->ImpactNormal, Transform))
@@ -359,9 +402,15 @@ void FDeepLevelCityBuildingDecorationEditor::BindViewportCommands(FUICommandList
 	const auto& Generic = FGenericCommands::Get();
 	Map(Generic.Duplicate, [this] { if (HasEntry()) { Document->DuplicateEntry(); } else { Document->DuplicateVariant(); } }, [this] { return HasVariant(); });
 	Map(Generic.Delete, [this] { if (HasEntry()) { Document->RemoveEntry(); } else { Document->RemoveVariant(); } }, [this] { return HasVariant(); });
+	Map(Generic.SelectAll, [this]
+	{
+		TArray<FGuid> Ids;
+		for (const auto& Entry : Document->GetVariant()->Entries) { Ids.Add(Entry.EntryGuid); }
+		Document->SelectEntries(Ids);
+	}, [this] { return HasVariant(); });
 	Map(Generic.Copy, [this] { Document->CopyEntry(); }, [this] { return HasEntry(); });
 	Map(Generic.Paste, [this] { Document->PasteEntry(); }, [this] { return HasVariant() && Document->HasClipboard(); });
-	Map(Generic.Undo, [this] { Document->Undo(); }, [] { return GEditor != nullptr; });
+	Map(Generic.Undo, [this] { if (IsPlacingSymmetry()) { CancelSymmetryPlacement(); } else { Document->Undo(); } }, [] { return GEditor != nullptr; });
 	Map(Generic.Redo, [this] { Document->Redo(); }, [] { return GEditor != nullptr; });
 	const auto& Viewport = FEditorViewportCommands::Get();
 	Map(Viewport.TranslateMode, [this] { SetWidgetMode(UE::Widget::WM_Translate); }, [this] { return HasEntry(); });

@@ -2,6 +2,7 @@
 
 #include "Building/DeepLevelBuildingEditor.h"
 #include "Building/DeepLevelBuildingCatalogAuthoring.h"
+#include "Building/DeepLevelBuildingPreviewPresentation.h"
 #include "SceneView.h"
 
 // ---- DeepLevelBuildingCatalogPreviewViewport ----
@@ -23,16 +24,7 @@ IMPLEMENT_HIT_PROXY(HDeepLevelBuildingFaceProxy, HHitProxy);
 
 namespace
 {
-	FLinearColor ExposureColor(const EDeepLevelStreetExposureRule Rule)
-	{
-		switch (Rule)
-		{
-		case EDeepLevelStreetExposureRule::Required: return FLinearColor(0.1f, 1.0f, 0.2f);
-		case EDeepLevelStreetExposureRule::Preferred: return FLinearColor(0.1f, 0.5f, 1.0f);
-		case EDeepLevelStreetExposureRule::Forbidden: return FLinearColor(1.0f, 0.1f, 0.1f);
-		default: return FLinearColor(0.65f, 0.65f, 0.65f);
-		}
-	}
+	using DeepLevelBuildingPreviewPresentation::ExposureColor;
 }
 
 FDeepLevelBuildingCatalogViewportClient::FDeepLevelBuildingCatalogViewportClient(FAdvancedPreviewScene& InScene, const TSharedRef<SEditorViewport>& InViewport, TWeakPtr<FDeepLevelBuildingCatalogEditorToolkit> InToolkit)
@@ -318,6 +310,7 @@ void SDeepLevelBuildingCatalogPreviewViewport::PreviewBuilding(const UDeepLevelB
 	ClearPreview();
 	if (!Catalog.Buildings.IsValidIndex(BuildingIndex)) { return; }
 	const FDeepLevelBuildingPlacementDefinition& Definition = Catalog.Buildings[BuildingIndex];
+	const bool bFrameBuilding = FramedBuildingClass != Definition.BuildingClass;
 	const FDeepLevelResolvedBuildingGeometry Geometry = FDeepLevelBuildingPlacementGeometry::ResolveGeometry(Definition, PreviewStreetFace);
 	GuideStride = Geometry.HalfWidth * 2.0;
 	SpawnDefinition(Definition, FTransform::Identity, true);
@@ -353,12 +346,18 @@ void SDeepLevelBuildingCatalogPreviewViewport::PreviewBuilding(const UDeepLevelB
 			}
 		}
 	}
+	if (ViewportClient && bFrameBuilding && PrimaryActor.IsValid())
+	{
+		DeepLevelBuildingPreviewPresentation::Focus(*ViewportClient, PrimaryActor->GetComponentsBoundingBox(true, true), Definition.PlacementVolume, PrimaryActor->GetActorTransform());
+		FramedBuildingClass = Definition.BuildingClass;
+	}
 	if (ViewportClient) ViewportClient->Invalidate();
 }
 
 void SDeepLevelBuildingCatalogPreviewViewport::PreviewPreset(const UDeepLevelBuildingPlacementCatalog& Catalog, int32 PresetIndex, const int32 Seed)
 {
 	if (!PreviewScene.IsValid()) return;
+	FramedBuildingClass.Reset();
 	ClearPreview();
 	if (!Catalog.Presets.IsValidIndex(PresetIndex)) { return; }
 	double Cursor = 0.0;
@@ -381,11 +380,11 @@ void SDeepLevelBuildingCatalogPreviewViewport::PreviewPreset(const UDeepLevelBui
 				const double Width = FDeepLevelBuildingPlacementGeometry::ResolveGeometry(*Definition, Face).HalfWidth * 2.0;
 				SpawnDefinition(*Definition, MakeTransform(*Definition, Cursor + Width * 0.5), !PrimaryActor.IsValid());
 				Cursor += Width;
+			}
 		}
 	}
-	if (ViewportClient) ViewportClient->Invalidate();
-}
 	GuideStride = Cursor * 0.5;
+	if (ViewportClient) ViewportClient->Invalidate();
 }
 
 
@@ -507,16 +506,7 @@ void SDeepLevelBuildingCatalogPreviewViewport::DrawLabels(const FSceneView* View
 		FVector2D ScreenPos;
 		if (View->ScreenToPixel(View->WorldToScreen(CenterWorld), ScreenPos))
 		{
-			FString Text;
-			switch (Rule)
-			{
-			case EDeepLevelStreetExposureRule::Required: Text = TEXT("REQUIRED"); break;
-			case EDeepLevelStreetExposureRule::Preferred: Text = TEXT("PREFERRED"); break;
-			case EDeepLevelStreetExposureRule::Forbidden: Text = TEXT("FORBIDDEN"); break;
-			default: Text = TEXT("NEUTRAL"); break;
-			}
-
-			FCanvasTextItem TextItem(ScreenPos, FText::FromString(Text), GEngine->GetSmallFont(), ExposureColor(Rule));
+			FCanvasTextItem TextItem(ScreenPos, DeepLevelBuildingPreviewPresentation::ExposureText(Rule), GEngine->GetSmallFont(), ExposureColor(Rule));
 			TextItem.bOutlined = true;
 			TextItem.OutlineColor = FLinearColor::Black;
 			TextItem.Scale = FVector2D(1.25f);

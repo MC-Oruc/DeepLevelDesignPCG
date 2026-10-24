@@ -9,6 +9,7 @@
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/JsonSerializer.h"
+#include "Misc/PackageName.h"
 #include "ToolsetRegistry/UToolsetRegistry.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -18,21 +19,25 @@ namespace
 	{
 		TStrongObjectPtr<UDeepLevelCityBuildingDecorationProfile> Profile{NewObject<UDeepLevelCityBuildingDecorationProfile>(GetTransientPackage(), NAME_None, RF_Transient)};
 		TStrongObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog{NewObject<UDeepLevelBuildingPlacementCatalog>(GetTransientPackage(), NAME_None, RF_Transient)};
-		TStrongObjectPtr<UDeepLevelCityDecorationSet> Set{NewObject<UDeepLevelCityDecorationSet>(GetTransientPackage(), NAME_None, RF_Transient)};
-		FFixture()
+		TStrongObjectPtr<UDeepLevelCityDecorationSet> Set;
+		FString SetPackagePath;
+		explicit FFixture(bool bAssigned = true)
 		{
+			SetPackagePath = FString::Printf(TEXT("/Game/Developers/DecorationDSLTests/%s/DA_Set"), *FGuid::NewGuid().ToString(EGuidFormats::Digits));
+			Set.Reset(NewObject<UDeepLevelCityDecorationSet>(CreatePackage(*SetPackagePath), TEXT("DA_Set"), RF_Transient));
 			Profile->BuildingClass = APackedLevelActor::StaticClass();
 			auto& Building = Catalog->Buildings.Emplace_GetRef();
 			Building.BuildingClass = Profile->BuildingClass;
 			Building.bCalibrated = true;
 			Set->BuildingCatalog = Catalog.Get();
-			Set->BuildingProfiles.Add(Profile.Get());
+			if (bAssigned) { Set->BuildingProfiles.Add(Profile.Get()); }
 		}
 		FString Request(const FString& Operations, const FString& Options = FString()) const
 		{
 			return FString::Printf(TEXT("{\"version\":1,\"domain\":\"decoration\",\"set\":\"%s\",\"building\":\"%s\",\"operations\":%s%s}"),
 				*Set->GetPathName(), *Profile->BuildingClass.ToString(), *Operations, *Options);
 		}
+		FString NewProfilePath() const { return FPackageName::GetLongPackagePath(SetPackagePath) / (TEXT("Buildings/DA_TestProfile_") + FPackageName::GetShortName(SetPackagePath)); }
 	};
 	const TCHAR* Arrangement = TEXT(R"JSON([
 		{"op":"variant.add","name":"Facade","as":"v"},
@@ -132,6 +137,68 @@ bool FDeepLevelPCGDSLValidationTest::RunTest(const FString&)
 	const auto Inspection = DeepLevelPCGAutomation::Execute(F.Request(TEXT("[]")));
 	TestTrue(TEXT("Invalid profile can be inspected"), Inspection.bSuccess);
 	TestFalse(TEXT("Inspection reports actual validation status"), Inspection.Report->GetBoolField(TEXT("validated")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelPCGDSLProfileCreationTest, "DeepLevelDesignPCG.Editor.City.DecorationAutomation.ProfileCreateAttachDryRun",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDeepLevelPCGDSLProfileCreationTest::RunTest(const FString&)
+{
+	FFixture F(false);
+	const FString Path = F.NewProfilePath();
+	const FString CreateOptions = FString::Printf(TEXT(",\"profile\":\"%s\""), *Path);
+	const FString DryOptions = CreateOptions + TEXT(",\"dryRun\":true");
+	const FString Capture = TEXT(R"JSON(,"capture":true,"captureSize":[256,256],"camera":{"location":[400,400,300],"rotation":[-20,-135,0]},"variant":"$v")JSON");
+	const auto Dry = DeepLevelPCGAutomation::Execute(F.Request(TEXT(R"JSON([{"op":"variant.add","name":"Preview","as":"v"}])JSON"), DryOptions + Capture));
+	TestTrue(TEXT("Unassigned profile dry run stages and validates"), Dry.bSuccess && Dry.Report->GetBoolField(TEXT("validated")));
+	TestFalse(TEXT("Dry run does not report application"), Dry.Report->GetBoolField(TEXT("applied")));
+	TestTrue(TEXT("Dry run leaves the live set unassigned"), F.Set->BuildingProfiles.IsEmpty());
+	const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
+	TestNull(TEXT("Dry run creates no persistent profile object"), FindObject<UDeepLevelCityBuildingDecorationProfile>(nullptr, *ObjectPath));
+	if (FApp::CanEverRender()) { TestTrue(TEXT("Unassigned profile dry run captures its staged variant"), Dry.Report->GetBoolField(TEXT("captured"))); }
+
+	const auto Created = DeepLevelPCGAutomation::Execute(F.Request(TEXT(R"JSON([{"op":"variant.add","name":"Initial"}])JSON"), CreateOptions));
+	if (!TestTrue(TEXT("AssetTools creates and document attaches the profile"), Created.bSuccess)) { AddError(DeepLevelPCGAutomation::ToJson(Created.Report)); return false; }
+	TestEqual(TEXT("One profile assignment is made"), F.Set->BuildingProfiles.Num(), 1);
+	auto* Profile = Cast<UDeepLevelCityBuildingDecorationProfile>(F.Set->BuildingProfiles[0]);
+	TestNotNull(TEXT("Created asset is assigned"), Profile);
+	if (Profile)
+	{
+		TestEqual(TEXT("Attach initializes the selected catalog class"), Profile->BuildingClass, F.Profile->BuildingClass);
+		TestEqual(TEXT("Attach default and staged variant both reach the created profile"), Profile->Variants.Num(), 2);
+	}
+	TestTrue(TEXT("Creation result reports unsaved profile"), !Created.Report->GetBoolField(TEXT("saved")));
+
+	FFixture Blank(false);
+	const FString BlankPath = Blank.NewProfilePath();
+	auto* BlankAsset = NewObject<UDeepLevelCityBuildingDecorationProfile>(CreatePackage(*BlankPath), *FPackageName::GetShortName(BlankPath));
+	const auto Reused = DeepLevelPCGAutomation::Execute(Blank.Request(TEXT("[]"), FString::Printf(TEXT(",\"profile\":\"%s\""), *BlankPath)));
+	TestTrue(TEXT("Existing blank profile asset is attached"), Reused.bSuccess);
+	TestTrue(TEXT("Existing blank asset is reused by identity"), Blank.Set->BuildingProfiles.Num() == 1 && Blank.Set->BuildingProfiles[0] == BlankAsset);
+	TestEqual(TEXT("Blank asset is initialized for the selected class"), BlankAsset->BuildingClass, Blank.Profile->BuildingClass);
+
+	FFixture Occupied(false);
+	const FString OccupiedPath = Occupied.NewProfilePath();
+	const FString OccupiedObjectPath = OccupiedPath + TEXT(".") + FPackageName::GetShortName(OccupiedPath);
+	auto* OccupiedAsset = NewObject<UDeepLevelCityBuildingDecorationProfile>(CreatePackage(*OccupiedPath), *FPackageName::GetShortName(OccupiedPath));
+	OccupiedAsset->BuildingClass = APackedLevelActor::StaticClass();
+	const auto Rejected = DeepLevelPCGAutomation::Execute(Occupied.Request(TEXT("[]"), FString::Printf(TEXT(",\"profile\":\"%s\""), *OccupiedPath)));
+	TestFalse(TEXT("Occupied existing profile is rejected"), Rejected.bSuccess);
+	TestEqual(TEXT("Rejected request leaves the set unassigned"), Occupied.Set->BuildingProfiles.Num(), 0);
+	TestTrue(TEXT("Rejected request preserves occupied asset"), FindObject<UDeepLevelCityBuildingDecorationProfile>(nullptr, *OccupiedObjectPath) == OccupiedAsset);
+	FFixture OutOfScopeFixture(false);
+	const auto OutOfScope = DeepLevelPCGAutomation::Execute(OutOfScopeFixture.Request(TEXT("[]"), TEXT(R"JSON(,"profile":"/Game/Other/DA_Profile")JSON")));
+	TestFalse(TEXT("Profile packages outside the set Buildings folder are rejected"), OutOfScope.bSuccess);
+	const FString ProfileWithoutBuilding = FString::Printf(TEXT("{\"version\":1,\"domain\":\"decoration\",\"set\":\"%s\",\"profile\":\"%s\",\"operations\":[]}"), *OutOfScopeFixture.Set->GetPathName(), *OutOfScopeFixture.NewProfilePath());
+	TestFalse(TEXT("Profile creation without a building is rejected"), DeepLevelPCGAutomation::Execute(ProfileWithoutBuilding).bSuccess);
+	FFixture Duplicate(false);
+	Duplicate.Set->BuildingProfiles.Add(Duplicate.Profile.Get());
+	Duplicate.Set->BuildingProfiles.Add(Duplicate.Profile.Get());
+	const auto DuplicateAssignment = DeepLevelPCGAutomation::Execute(Duplicate.Request(TEXT("[]"), FString::Printf(TEXT(",\"profile\":\"%s\""), *Duplicate.NewProfilePath())));
+	TestFalse(TEXT("Duplicate building assignments cannot be replaced by creation"), DuplicateAssignment.bSuccess);
+	TestEqual(TEXT("Rejected duplicate assignment remains intact"), Duplicate.Set->BuildingProfiles.Num(), 2);
+	const FString WrongClassPath = FString::Printf(TEXT("{\"version\":1,\"domain\":\"decoration\",\"set\":\"%s\",\"building\":\"/Script/Engine.Actor\",\"profile\":\"%s\",\"operations\":[]}"), *F.Set->GetPathName(), *F.NewProfilePath());
+	TestFalse(TEXT("Building classes outside the exact catalog class are rejected"), DeepLevelPCGAutomation::Execute(WrongClassPath).bSuccess);
 	return true;
 }
 

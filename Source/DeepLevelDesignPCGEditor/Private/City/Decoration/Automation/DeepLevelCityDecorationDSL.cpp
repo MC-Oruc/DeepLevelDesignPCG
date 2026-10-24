@@ -9,6 +9,11 @@
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "Factories/DataAssetFactory.h"
+#include "Modules/ModuleManager.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -316,7 +321,7 @@ namespace
 
 FString DeepLevelCityDecorationDSL::Describe()
 {
-	return TEXT(R"JSON({"scope":"Existing building profiles linked through a City Decoration Set. No level generation, asset creation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links.","operations":[{"op":"variant.add","fields":["name?","weight?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"as":"lamp"},{"op":"link.create","variant":"$v","entry":"$lamp","axis":"Y","as":"other"}],"variant":"$v","capture":true,"save":false}})JSON");
+	return TEXT(R"JSON({"scope":"City Decoration Set and its linked building profiles. Profile creation is explicit and limited to the selected catalog building; no level generation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links. If the building has no profile, provide profile as an exact long package path under the set's Buildings folder. Existing profile package is reusable only when its class is null and variants are empty. dryRun creates no persistent assets.","rootFields":["version","domain","set","building?","profile?","variant?","operations","capture?","save?","dryRun?","includeState?","camera?","captureSize?"],"operations":[{"op":"variant.add","fields":["name?","weight?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","profile":"/Game/Example/Buildings/DA_Building_Decoration","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"as":"lamp"}],"variant":"$v","save":true}})JSON");
 }
 
 void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAutomationResult& Out)
@@ -324,8 +329,10 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 	FString Error, SetPath, Building;
 	bool bCapture = false, bSave = false, bDryRun = false, bState = true;
 	const auto Fail = [&](const FString& Message) { Out.Report->SetStringField(TEXT("error"), Message); };
-	if (!Fields(Request, {TEXT("version"),TEXT("domain"),TEXT("set"),TEXT("building"),TEXT("variant"),TEXT("operations"),TEXT("capture"),TEXT("save"),TEXT("dryRun"),TEXT("includeState"),TEXT("camera"),TEXT("captureSize")}, Error)
+	FString ProfilePackagePath;
+	if (!Fields(Request, {TEXT("version"),TEXT("domain"),TEXT("set"),TEXT("building"),TEXT("profile"),TEXT("variant"),TEXT("operations"),TEXT("capture"),TEXT("save"),TEXT("dryRun"),TEXT("includeState"),TEXT("camera"),TEXT("captureSize")}, Error)
 		|| !String(Request, TEXT("set"), SetPath, Error) || !String(Request, TEXT("building"), Building, Error, false)
+		|| !String(Request, TEXT("profile"), ProfilePackagePath, Error, false)
 		|| !Bool(Request, TEXT("capture"), bCapture, Error) || !Bool(Request, TEXT("save"), bSave, Error)
 		|| !Bool(Request, TEXT("dryRun"), bDryRun, Error) || !Bool(Request, TEXT("includeState"), bState, Error)) { Fail(Error); return; }
 	if (!bCapture && (Request->HasField(TEXT("camera")) || Request->HasField(TEXT("captureSize")))) { Fail(TEXT("camera/captureSize require capture=true.")); return; }
@@ -363,7 +370,7 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 	Out.Report->SetStringField(TEXT("set"), Set->GetPathName());
 	if (Building.IsEmpty())
 	{
-		if (!Operations->IsEmpty() || bCapture || bSave) { Fail(TEXT("An explicit catalog building class is required for edits, capture or save.")); return; }
+		if (!Operations->IsEmpty() || bCapture || bSave || Request->HasField(TEXT("profile"))) { Fail(TEXT("An explicit catalog building class is required for edits, capture, profile creation or save.")); return; }
 		TArray<TSharedPtr<FJsonValue>> Buildings;
 		if (const auto* Catalog = Live.GetCatalog())
 		{
@@ -382,21 +389,43 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 		Out.Report->SetArrayField(TEXT("issues"), Issues);
 		Out.bSuccess = true; return;
 	}
-	if (!Live.SelectBuilding(TSoftClassPtr<AActor>(FSoftObjectPath(Building))) || !Live.GetProfile()) { Fail(TEXT("Building requires a unique linked profile in the set's catalog.")); return; }
-	if (!Operations->IsEmpty() && !Live.CanEdit()) { Fail(TEXT("Profile identities/links are invalid; resolve document diagnostics before editing.")); return; }
+	const TSoftClassPtr<AActor> BuildingClass{FSoftObjectPath(Building)};
+	if (!Live.SelectBuilding(BuildingClass)) { Fail(TEXT("Building must exactly match one catalog class.")); return; }
+	const bool bCreatingProfile = Live.GetProfile() == nullptr;
+	if (bCreatingProfile != !ProfilePackagePath.IsEmpty()) { Fail(bCreatingProfile ? TEXT("Missing profile requires an explicit profile package path.") : TEXT("profile is only valid when the building has no assigned profile.")); return; }
+	if (!Live.CanCreateProfile() && bCreatingProfile) { Fail(TEXT("Selected building cannot receive a profile or already has an assignment.")); return; }
+	if (!bCreatingProfile && !Operations->IsEmpty() && !Live.CanEdit()) { Fail(TEXT("Profile identities/links are invalid; resolve document diagnostics before editing.")); return; }
+	UDeepLevelCityBuildingDecorationProfile* ExistingRequestedProfile = nullptr;
+	if (bCreatingProfile)
+	{
+		const FString ExpectedDirectory = FPackageName::GetLongPackagePath(Set->GetOutermost()->GetName()) / TEXT("Buildings");
+		if (!FPackageName::IsValidLongPackageName(ProfilePackagePath) || FPackageName::GetLongPackagePath(ProfilePackagePath) != ExpectedDirectory
+			|| FPackageName::GetShortName(ProfilePackagePath).IsEmpty()) { Fail(TEXT("profile must be a valid package path directly under the set's Buildings folder.")); return; }
+		const FString ObjectPath = ProfilePackagePath + TEXT(".") + FPackageName::GetShortName(ProfilePackagePath);
+		UObject* ExistingObject = FindObject<UObject>(nullptr, *ObjectPath);
+		const bool bPackageOnDisk = FPackageName::DoesPackageExist(ProfilePackagePath);
+		if (!ExistingObject && bPackageOnDisk) { ExistingObject = LoadObject<UObject>(nullptr, *ObjectPath); }
+		ExistingRequestedProfile = Cast<UDeepLevelCityBuildingDecorationProfile>(ExistingObject);
+		if (ExistingRequestedProfile && (!ExistingRequestedProfile->BuildingClass.IsNull() || !ExistingRequestedProfile->Variants.IsEmpty()))
+		{ Fail(TEXT("Existing profile asset is occupied; only a blank profile can be initialized.")); return; }
+		if (!ExistingRequestedProfile && (ExistingObject || bPackageOnDisk)) { Fail(TEXT("Profile package already exists but is not the expected profile asset.")); return; }
+	}
 	auto* Original = const_cast<UDeepLevelCityBuildingDecorationProfile*>(Live.GetProfile());
 	TStrongObjectPtr<UDeepLevelCityBuildingDecorationProfile> OriginalOwner(Original);
 	TStrongObjectPtr<UDeepLevelCityBuildingDecorationProfile> Stage(NewObject<UDeepLevelCityBuildingDecorationProfile>(GetTransientPackage(), NAME_None, RF_Transient));
-	Stage->BuildingClass = Original->BuildingClass;
-	Stage->Variants = Original->Variants;
+	if (Original) { Stage->BuildingClass = Original->BuildingClass; Stage->Variants = Original->Variants; }
 	TStrongObjectPtr<UDeepLevelCityDecorationSet> StageSet(NewObject<UDeepLevelCityDecorationSet>(GetTransientPackage(), NAME_None, RF_Transient));
 	StageSet->BuildingCatalog = Set->BuildingCatalog;
 	StageSet->Categories = Set->Categories;
 	StageSet->BuildingProfiles = Set->BuildingProfiles;
-	for (auto& P : StageSet->BuildingProfiles) { if (P == Original) { P = Stage.Get(); } }
-	FDeepLevelCityDecorationDocument Document(EDeepLevelCityDecorationEditMode::Staging);
+	if (Original)
+	{
+		for (auto& P : StageSet->BuildingProfiles) { if (P == Original) { P = Stage.Get(); } }
+	}
+	FDeepLevelCityDecorationDocument Document(Original ? EDeepLevelCityDecorationEditMode::Staging : EDeepLevelCityDecorationEditMode::Undoable);
 	Document.Open(StageSet.Get());
-	Document.SelectBuilding(Stage->BuildingClass);
+	Document.SelectBuilding(BuildingClass);
+	if (!Original && !Document.AttachProfile(Stage.Get(), true)) { Fail(TEXT("Transient staging profile could not be initialized through the decoration document.")); return; }
 	FBatch Batch(Document);
 	for (int32 I = 0; I < Operations->Num(); ++I)
 	{
@@ -417,26 +446,48 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 		{ Fail(Batch.Error.IsEmpty() ? TEXT("Capture variant not found.") : Batch.Error); return; }
 	}
 	if (bCapture && !Authoring::FindVariant(*Stage, CaptureVariant)) { Fail(TEXT("Capture requires an explicit variant or a variant selected by an operation.")); return; }
-	const bool bChanged = Json(State(*Original)) != Json(State(*Stage));
-	if (!bDryRun && bChanged && !Live.CommitVariants(Stage->Variants, Failure)) { Fail(Failure.IsEmpty() ? TEXT("Commit rejected.") : Failure.ToString()); return; }
+	const bool bChanged = bCreatingProfile || Json(State(*Original)) != Json(State(*Stage));
+	UDeepLevelCityBuildingDecorationProfile* AppliedProfile = Original;
+	if (!bDryRun && bCreatingProfile)
+	{
+		if (ExistingRequestedProfile) { AppliedProfile = ExistingRequestedProfile; }
+		else
+		{
+			auto* Factory = NewObject<UDataAssetFactory>();
+			Factory->DataAssetClass = UDeepLevelCityBuildingDecorationProfile::StaticClass();
+			AppliedProfile = Cast<UDeepLevelCityBuildingDecorationProfile>(FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get()
+				.CreateAsset(FPackageName::GetShortName(ProfilePackagePath), FPackageName::GetLongPackagePath(ProfilePackagePath), Factory->DataAssetClass, Factory));
+		}
+		if (!AppliedProfile) { Fail(TEXT("AssetTools could not create the requested profile asset.")); return; }
+		if (!Live.AttachProfile(AppliedProfile, true)) { Fail(TEXT("Profile asset exists, but document attachment failed; the asset may remain unassigned.")); return; }
+		if (!Live.CommitVariants(Stage->Variants, Failure)) { Fail(Failure.IsEmpty() ? TEXT("Profile attached, but staged variants could not be committed.") : Failure.ToString()); return; }
+	}
+	else if (!bDryRun && bChanged && !Live.CommitVariants(Stage->Variants, Failure)) { Fail(Failure.IsEmpty() ? TEXT("Commit rejected.") : Failure.ToString()); return; }
 	Out.Report->SetBoolField(TEXT("applied"), !bDryRun && bChanged);
 	Out.Report->SetBoolField(TEXT("changed"), bChanged);
 	Out.Report->SetBoolField(TEXT("validated"), bValidated);
 	if (!bValidated) { Out.Report->SetStringField(TEXT("validationError"), Failure.ToString()); }
 	Out.Report->SetBoolField(TEXT("dryRun"), bDryRun);
-	Out.Report->SetStringField(TEXT("profile"), Original->GetPathName());
+	Out.Report->SetStringField(TEXT("profile"), bDryRun && bCreatingProfile ? ProfilePackagePath : AppliedProfile->GetPathName());
 	Out.Report->SetArrayField(TEXT("operations"), Batch.Results);
-	if (bState) { Out.Report->SetObjectField(TEXT("state"), State(bDryRun ? *Stage : *Original)); }
+	if (bState) { Out.Report->SetObjectField(TEXT("state"), State(bDryRun ? *Stage : *AppliedProfile)); }
 	Out.bSuccess = true;
 	if (bSave)
 	{
-		UPackage* Package = Original->GetOutermost();
-		FString Filename;
-		FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
-		const bool bSaved = !Original->HasAnyFlags(RF_Transient) && FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), Filename, FPackageName::GetAssetPackageExtension())
-			&& UPackage::SavePackage(Package, Original, *Filename, Args);
-		Out.Report->SetBoolField(TEXT("saved"), bSaved);
-		if (!bSaved) { Out.bSuccess = false; Out.Report->SetStringField(TEXT("saveError"), TEXT("Profile save failed; check package path and write access. Applied changes remain undoable.")); }
+		const auto SaveAsset = [](UObject* Asset)
+		{
+			UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
+			FString Filename;
+			FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+			return Asset && !Asset->HasAnyFlags(RF_Transient) && FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), Filename, FPackageName::GetAssetPackageExtension())
+				&& UPackage::SavePackage(Package, Asset, *Filename, Args);
+		};
+		const bool bProfileSaved = SaveAsset(AppliedProfile);
+		const bool bSetSaved = !bCreatingProfile || SaveAsset(Set.Get());
+		Out.Report->SetBoolField(TEXT("profileSaved"), bProfileSaved);
+		Out.Report->SetBoolField(TEXT("setSaved"), bSetSaved);
+		Out.Report->SetBoolField(TEXT("saved"), bProfileSaved && bSetSaved);
+		if (!bProfileSaved || !bSetSaved) { Out.bSuccess = false; Out.Report->SetStringField(TEXT("saveError"), TEXT("Profile or set save failed; applied changes remain in memory and may be partially saved.")); }
 	}
-	if (bCapture) { DeepLevelCityDecorationCapture::Capture(bDryRun ? *Stage : *Original, CaptureVariant, CaptureOptions, Out); }
+	if (bCapture) { DeepLevelCityDecorationCapture::Capture(bDryRun ? *Stage : *AppliedProfile, CaptureVariant, CaptureOptions, Out); }
 }

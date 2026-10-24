@@ -41,6 +41,11 @@ public:
 	bool SelectBuilding(const TSoftClassPtr<AActor>& Class);
 	void SelectVariant(const FGuid& Id);
 	void SelectEntry(const FGuid& Id);
+	void SelectEntries(TConstArrayView<FGuid> Ids);
+	void SelectSymmetryPivot(const FGuid& Member);
+	const TArray<FGuid>& GetSelectedEntryIds() const { return SelectedEntryIds; }
+	bool IsSymmetryPivotSelected() const { return bSymmetryPivotSelected; }
+	FTransform GetSelectionTransform() const;
 	bool AttachProfile(UDeepLevelCityBuildingDecorationProfile* Profile, bool bInitializeNew = false);
 
 	const UDeepLevelCityDecorationSet* GetSet() const { return Set; }
@@ -55,6 +60,12 @@ public:
 	const FDeepLevelCityDecorationSymmetryPair* GetSymmetryPair() const;
 	bool CanCreateSymmetry(FGuid Target = {}) const;
 	bool CreateSymmetry(EAxis::Type Axis, FGuid Target = {});
+	bool CanPlaceSymmetry() const;
+	bool BuildSymmetryPreview(const FVector& Center, const FVector& Normal,
+		TArray<FDeepLevelCityBuildingDecorationEntry>& Copies, FText& Error) const;
+	bool CreateSymmetryAt(const FVector& Center, const FVector& Normal, FText& Error);
+	bool LinkSelectedPair();
+	FVector GetSymmetryCenter(const FDeepLevelCityDecorationSymmetryPair& Pair) const;
 	void UnlinkSymmetry();
 	bool SetSymmetrySettings(const FDeepLevelCityDecorationSymmetryPair& Desired, FText& Error);
 	bool CommitVariants(const TArray<FDeepLevelCityBuildingDecorationVariant>& Variants, FText& Error);
@@ -63,7 +74,7 @@ public:
 	const TArray<FDeepLevelCityDecorationDocumentIssue>& GetIssues() const { return Issues; }
 	bool CanEdit() const;
 	bool CanCreateProfile() const;
-	bool HasClipboard() const { return Clipboard.IsSet(); }
+	bool HasClipboard() const { return !Clipboard.IsEmpty(); }
 	bool IsDragging() const { return bDragging; }
 
 	bool RemoveAssignment(const UDeepLevelCityDecorationSet* ExpectedSet, int32 Index, const UDeepLevelCityBuildingDecorationProfile* ExpectedProfile);
@@ -81,6 +92,7 @@ public:
 	bool SetEntryFields(const FDeepLevelCityBuildingDecorationEntry& Desired, const FDeepLevelCityBuildingDecorationEntry& Baseline, FText& Error);
 	bool SetTransform(const FTransform& Transform, FText& Error);
 	void ApplyDragTransform(const FTransform& Transform);
+	void ApplySelectionDelta(const FVector& Drag, const FRotator& Rotation, const FVector& Scale, const FQuat& ScaleBasis = FQuat::Identity);
 	void EndDrag(bool bNotify = true, bool bExternalEdit = false);
 	void Undo();
 	void Redo();
@@ -95,6 +107,8 @@ private:
 	void SynchronizeSymmetryTransform();
 	bool ValidateLinkedTransform(const FTransform& Transform, FText& Error) const;
 	void BroadcastTransformChange();
+	void ApplyDragVariant(FDeepLevelCityBuildingDecorationVariant&& Candidate);
+	void AddSelectionCopies(TConstArrayView<FDeepLevelCityBuildingDecorationEntry> Entries, TConstArrayView<FDeepLevelCityDecorationSymmetryPair> Pairs);
 	void ReconcileSelection();
 	void RefreshIssues();
 	void ObjectChanged(UObject* Object, FPropertyChangedEvent& Event);
@@ -107,11 +121,14 @@ private:
 	TSoftClassPtr<AActor> BuildingClass;
 	FGuid VariantId;
 	FGuid EntryId;
-	TOptional<FDeepLevelCityBuildingDecorationEntry> Clipboard;
+	TArray<FGuid> SelectedEntryIds;
+	bool bSymmetryPivotSelected = false;
+	TArray<FDeepLevelCityBuildingDecorationEntry> Clipboard;
+	TArray<FDeepLevelCityDecorationSymmetryPair> ClipboardPairs;
 	TArray<FDeepLevelCityDecorationDocumentIssue> Issues;
 	FDelegateHandle PropertyChangedHandle;
 	TUniquePtr<FScopedTransaction> DragTransaction;
-	FTransform DragStart;
+	FDeepLevelCityBuildingDecorationVariant DragStart;
 	bool bDragging = false;
 	bool bDirtyBeforeDrag = false;
 	bool bMutating = false;

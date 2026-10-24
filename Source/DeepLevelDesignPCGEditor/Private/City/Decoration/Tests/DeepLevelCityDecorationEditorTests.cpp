@@ -13,6 +13,8 @@
 #include "Slate/SceneViewport.h"
 #include "EngineUtils.h"
 #include "SceneView.h"
+#include "SceneManagement.h"
+#include "RenderingThread.h"
 #include "UnrealWidget.h"
 #include "EditorViewportCommands.h"
 #include "UObject/Package.h"
@@ -25,6 +27,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/GenericCommands.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Settings/LevelEditorViewportSettings.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Serialization/MemoryReader.h"
@@ -32,6 +35,39 @@
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 
 namespace Authoring = DeepLevelCityDecorationAuthoring;
+
+namespace
+{
+class FDecorationGizmoDrawCollector final : public FSimpleElementCollector
+{
+public:
+	int32 AxisMeshes = 0;
+	TRefCountPtr<HHitProxy> CurrentProxy;
+	TArray<FDynamicPrimitiveResource*> Resources;
+	virtual void RegisterDynamicResource(FDynamicPrimitiveResource* Resource) override
+	{
+		Resources.Add(Resource);
+		ENQUEUE_RENDER_COMMAND(InitDecorationTestResource)([Resource](FRHICommandListImmediate& RHICmdList)
+		{
+			Resource->InitPrimitiveResource(RHICmdList);
+		});
+	}
+	virtual ~FDecorationGizmoDrawCollector() override
+	{
+		ENQUEUE_RENDER_COMMAND(ReleaseDecorationTestResources)([Pending = MoveTemp(Resources)](FRHICommandListImmediate&)
+		{
+			for (FDynamicPrimitiveResource* Resource : Pending) { Resource->ReleasePrimitiveResource(); }
+		});
+	}
+	virtual void SetHitProxy(HHitProxy* Proxy) override { CurrentProxy = Proxy; }
+	virtual bool IsHitTesting() override { return true; }
+	virtual int32 DrawMesh(const FMeshBatch&) override
+	{
+		if (CurrentProxy && CurrentProxy->IsA(HWidgetAxis::StaticGetType())) { ++AxisMeshes; }
+		return 1;
+	}
+};
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationEditorIdentityTest,
 	"DeepLevelDesignPCG.Editor.City.DecorationEditor.Identity",
@@ -777,6 +813,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationViewportSelectionTest,
 bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 {
 	FDecorationFixture Fixture;
+	Fixture.Catalog->Buildings[0].PlacementVolume.Exposure.PositiveX = EDeepLevelStreetExposureRule::Required;
+	Fixture.Catalog->Buildings[0].PlacementVolume.Exposure.PositiveY = EDeepLevelStreetExposureRule::Required;
+	Fixture.Catalog->Buildings[1].PlacementVolume.Exposure.NegativeX = EDeepLevelStreetExposureRule::Required;
 	Fixture.Set->SetFlags(RF_Transient);
 	Fixture.Profile->SetFlags(RF_Transient);
 	const auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
@@ -816,6 +855,16 @@ bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 	TestEqual(TEXT("Selected decoration enables native scale command"), Client->GetWidgetMode(), UE::Widget::WM_Scale);
 	Commands.ExecuteAction(FEditorViewportCommands::Get().TranslateMode.ToSharedRef());
 	TestEqual(TEXT("Selected decoration enables native translate command"), Client->GetWidgetMode(), UE::Widget::WM_Translate);
+	for (const auto Mode : {UE::Widget::WM_Translate, UE::Widget::WM_Rotate, UE::Widget::WM_Scale})
+	{
+		TestTrue(TEXT("Document selection enables the transform mode without actor selection"), Client->CanSetWidgetMode(Mode));
+		Client->SetWidgetMode(Mode);
+		FDecorationGizmoDrawCollector DrawCollector;
+		DrawCollector.View = &View;
+		Client->Draw(&View, &DrawCollector);
+		FlushRenderingCommands();
+		TestTrue(TEXT("Selected decoration draws clickable native gizmo geometry"), DrawCollector.AxisMeshes > 0);
+	}
 	Commands.ExecuteAction(FGenericCommands::Get().Duplicate.ToSharedRef());
 	TestEqual(TEXT("Viewport duplication edits the owning variant"), Fixture.Profile->Variants[0].Entries.Num(), 2);
 	Commands.ExecuteAction(FGenericCommands::Get().Delete.ToSharedRef());
@@ -827,6 +876,17 @@ bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 	Client->ProcessClick(View, ActorHit, EKeys::LeftMouseButton, IE_DoubleClick, 0, 0);
 	TestEqual(TEXT("Native double click also selects decoration"), Toolkit->GetSelectedEntryId(), Entry);
 	TestTrue(TEXT("Viewport and outline share one selection menu"), Toolkit->BuildSelectionMenu().IsValid());
+	TestTrue(TEXT("Initial camera shows both required faces"), Client->GetViewRotation().Vector().GetSafeNormal2D().Equals(FVector(-1, -1, 0).GetSafeNormal()));
+	const FVector ManualLocation(2500, -1700, 900);
+	const FRotator ManualRotation(-12, 137, 0);
+	Client->SetViewLocation(ManualLocation);
+	Client->SetViewRotation(ManualRotation);
+	const FGuid OtherVariant = Authoring::AddVariant(*Fixture.Profile);
+	Toolkit->Document->SelectVariant(OtherVariant);
+	TestTrue(TEXT("Variant change preserves camera position"), Client->GetViewLocation().Equals(ManualLocation));
+	TestTrue(TEXT("Variant change preserves camera rotation"), Client->GetViewRotation().Equals(ManualRotation));
+	Toolkit->Document->SelectBuilding(APackedLevelActor::StaticClass());
+	TestTrue(TEXT("Different building frames its own required face"), Client->GetViewRotation().Vector().GetSafeNormal2D().Equals(FVector::ForwardVector));
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
 	return true;
 }
@@ -991,6 +1051,367 @@ bool FDeepLevelCityDecorationFlexibleLinkInspectorTest::RunTest(const FString&)
 	Toolkit->Document->Undo();
 	TestTrue(TEXT("Undo restores settings inspector and baked transforms"), Toolkit->EntryProxy->Symmetry.bSyncLocation && Toolkit->Document->GetVariant()->HasValidSymmetry());
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationMultiSelectionDocumentTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.MultiSelection.Document",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationMultiSelectionDocumentTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Document = Fixture.Document;
+	FText Error;
+	const FGuid First = Document.GetEntryId();
+	Document.SetTransform(FTransform(FVector(-100, 0, 50)), Error);
+	auto Extra = *Document.GetEntry();
+	Extra.LocalTransform.SetLocation(FVector(100, 0, 50));
+	Document.AddEntries(MakeArrayView(&Extra, 1));
+	const FGuid Second = Document.GetEntryId();
+	const TArray<FGuid> Ids{First, Second};
+	Document.SelectEntries(Ids);
+	TestEqual(TEXT("Selection retains both decorations"), Document.GetSelectedEntryIds().Num(), 2);
+	TestEqual(TEXT("Group gizmo uses their centroid"), Document.GetSelectionTransform().GetLocation(), FVector(0, 0, 50));
+	Document.ApplySelectionDelta(FVector(30, 20, 10), FRotator(0, 90, 0), FVector(1));
+	Document.EndDrag();
+	TestTrue(TEXT("Group rotation and scale orbit the shared center"), Document.GetEntry(First)->LocalTransform.GetLocation().Equals(FVector(30, -180, 60), 0.001));
+	TestTrue(TEXT("Both entries receive the same group transform"), Document.GetEntry(Second)->LocalTransform.GetLocation().Equals(FVector(30, 220, 60), 0.001));
+	Document.Undo();
+	TestEqual(TEXT("One undo restores the entire selection"), Document.GetEntry(First)->LocalTransform.GetLocation(), FVector(-100, 0, 50));
+	TestEqual(TEXT("Undo also restores its second member"), Document.GetEntry(Second)->LocalTransform.GetLocation(), FVector(100, 0, 50));
+	Document.Redo();
+	TestTrue(TEXT("Redo restores both moved members"), Document.GetEntry(First)->LocalTransform.GetLocation().Equals(FVector(30, -180, 60), 0.001));
+	Document.CopyEntry();
+	Document.PasteEntry();
+	TestEqual(TEXT("Copy/paste includes every selected decoration"), Document.GetVariant()->Entries.Num(), 4);
+	TestEqual(TEXT("Pasted decorations become the complete selection"), Document.GetSelectedEntryIds().Num(), 2);
+	Document.RemoveEntry();
+	TestEqual(TEXT("Delete removes the entire selected group"), Document.GetVariant()->Entries.Num(), 2);
+	Document.Undo();
+	TestEqual(TEXT("One undo restores every deleted decoration"), Document.GetVariant()->Entries.Num(), 4);
+	Document.SelectEntries(Ids);
+	Document.SelectVariant(Document.GetVariantId());
+	TestTrue(TEXT("Changing selection to a variant clears group state"), Document.GetSelectedEntryIds().IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationSymmetryPivotTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.Symmetry.Pivot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationSymmetryPivotTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Document = Fixture.Document;
+	Fixture.Catalog->Buildings[0].bCalibrated = true;
+	FText Error;
+	Document.SetTransform(FTransform(FRotator(5, 25, 0), FVector(100, 200, 80), FVector(2, 3, 1)), Error);
+	const FGuid First = Document.GetEntryId();
+	Document.CreateSymmetry(EAxis::Y);
+	auto Settings = *Document.GetSymmetryPair();
+	Settings.LocationOffset = FVector(15, 20, 30);
+	Settings.RotationOffset = FRotator(0, 15, 0);
+	Settings.ScaleMultiplier = FVector(1, 2, 1);
+	Document.SetSymmetrySettings(Settings, Error);
+	const FGuid Second = Settings.Second;
+	const FTransform BeforeFirst = Document.GetEntry(First)->LocalTransform;
+	const FTransform BeforeSecond = Document.GetEntry(Second)->LocalTransform;
+	Document.SelectSymmetryPivot(First);
+	TestTrue(TEXT("Symmetry center is a distinct transform target"), Document.IsSymmetryPivotSelected());
+	TestEqual(TEXT("Offset pairs use their actual midpoint, never the building origin"), Document.GetSelectionTransform().GetLocation(),
+		(BeforeFirst.GetLocation() + BeforeSecond.GetLocation()) * 0.5);
+	const FVector Shift(60, -40, 25);
+	Document.ApplySelectionDelta(Shift, FRotator::ZeroRotator, FVector::ZeroVector);
+	Document.EndDrag();
+	TestEqual(TEXT("Center movement is persisted on the existing pair"), Document.GetSymmetryPair()->PlaneOrigin, Settings.PlaneOrigin + Shift);
+	TestTrue(TEXT("Moving center carries the source"), Document.GetEntry(First)->LocalTransform.GetLocation().Equals(BeforeFirst.GetLocation() + Shift));
+	TestTrue(TEXT("Moving center carries the offset target"), Document.GetEntry(Second)->LocalTransform.GetLocation().Equals(BeforeSecond.GetLocation() + Shift));
+	TestTrue(TEXT("Moving center preserves asymmetric placement offsets"), Document.GetSymmetryPair()->LocationOffset.Equals(Settings.LocationOffset, 0.001));
+	Document.Undo();
+	TestEqual(TEXT("One undo restores the center"), Document.GetSymmetryPair()->PlaneOrigin, Settings.PlaneOrigin);
+	TestTrue(TEXT("One undo restores both endpoints"), Document.GetEntry(First)->LocalTransform.Equals(BeforeFirst) && Document.GetEntry(Second)->LocalTransform.Equals(BeforeSecond));
+	Document.Redo();
+	const FVector Center = Document.GetSelectionTransform().GetLocation();
+	Document.ApplySelectionDelta(FVector::ZeroVector, FRotator(0, 45, 0), FVector(0.5, 0, 0));
+	Document.EndDrag();
+	TestTrue(TEXT("Rotating/scaling keeps the actual endpoint midpoint fixed"), Document.GetSelectionTransform().GetLocation().Equals(Center, 0.001));
+	TestTrue(TEXT("Rotated and scaled offset pair remains valid"), Document.GetVariant()->HasValidSymmetry());
+	Document.SelectEntry(Second);
+	auto Desired = Document.GetEntry()->LocalTransform;
+	Desired.AddToTranslation(FVector(10, 20, 30));
+	TestTrue(TEXT("Individual endpoint remains editable after moving the center"), Document.SetTransform(Desired, Error));
+	TestTrue(TEXT("Reverse edits still synchronize through the adjusted plane"), Document.GetVariant()->HasValidSymmetry());
+	const TArray<FGuid> Ids{First, Second};
+	Document.SelectEntries(Ids);
+	Document.ApplySelectionDelta(FVector(30, 50, 10), FRotator(0, -20, 0), FVector::ZeroVector);
+	Document.EndDrag();
+	TestTrue(TEXT("Selecting both endpoints does not apply the link twice"), Document.GetVariant()->HasValidSymmetry());
+	Document.DuplicateEntry();
+	TestEqual(TEXT("Group duplication preserves complete pairs"), Document.GetVariant()->SymmetryPairs.Num(), 2);
+	TestTrue(TEXT("Duplicated pair identities and transforms remain valid"), Document.GetVariant()->HasValidSymmetry());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationMultiSelectionPreviewTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.MultiSelection.Preview",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationMultiSelectionPreviewTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	Fixture.Set->SetFlags(RF_Transient);
+	Fixture.Profile->SetFlags(RF_Transient);
+	Fixture.Catalog->Buildings[0].bCalibrated = true;
+	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
+	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
+	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	const FGuid First = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
+	Toolkit->SelectEntry(First);
+	Toolkit->Document->CreateSymmetry(EAxis::Y);
+	const FGuid Second = Toolkit->GetSelectedSymmetryPair()->Second;
+	Toolkit->SelectEntry(Second, true);
+	TestEqual(TEXT("Ctrl selection retains two decorations"), Toolkit->GetSelectedEntryIds().Num(), 2);
+	TestEqual(TEXT("Outline reflects both viewport selections"), Toolkit->Outline->GetSelectedItems().Num(), 2);
+	TestTrue(TEXT("Group inspector owns the displayed transform"), Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->SelectionProxy);
+	Toolkit->ApplyWidgetDelta(FVector(40, 20, 10), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->EndWidgetDrag();
+	for (const FGuid& Id : Toolkit->GetSelectedEntryIds())
+	{
+		TestTrue(TEXT("Both preview actors follow the document"), Toolkit->Preview->GetEntryActor(Id)->GetActorTransform().Equals(Toolkit->GetDecoration(Id)->LocalTransform));
+	}
+	Toolkit->SelectEntry(Second, true);
+	TestEqual(TEXT("Ctrl toggles a selected decoration off"), Toolkit->GetSelectedEntryIds().Num(), 1);
+	const auto EntryRow = Toolkit->OutlineItems[0]->Children[0]->Children.FindByPredicate([&](const auto& Row) { return Row->Entry == Second; });
+	if (TestNotNull(TEXT("Second decoration has an outline row"), EntryRow))
+	{
+		Toolkit->Outline->SetItemSelection(*EntryRow, true, ESelectInfo::OnMouseClick);
+		TestEqual(TEXT("Outline multi-selection updates document selection"), Toolkit->GetSelectedEntryIds().Num(), 2);
+	}
+	Toolkit->SelectSymmetryPivot(First);
+	TestTrue(TEXT("Symmetry center selects both linked decorations"), Toolkit->GetSelectedEntryIds().Contains(First) && Toolkit->GetSelectedEntryIds().Contains(Second));
+	TestTrue(TEXT("Symmetry point selects the center"), Toolkit->IsSymmetryPivotSelected());
+	TestEqual(TEXT("Gizmo moves onto the persisted center"), Toolkit->Preview->GetClient()->GetWidgetLocation(), Toolkit->GetSelectedSymmetryPair()->PlaneOrigin);
+	Toolkit->ApplyWidgetDelta(FVector(90, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->EndWidgetDrag();
+	TestTrue(TEXT("Center drag updates the linked preview atomically"), Toolkit->Preview->GetEntryActor(Second)->GetActorTransform().Equals(Toolkit->GetDecoration(Second)->LocalTransform));
+	TestEqual(TEXT("Center inspector counts both linked decorations"), Toolkit->SelectionProxy->DecorationCount, 2);
+	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationSymmetryBatchTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.Symmetry.BatchPlacement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationSymmetryBatchTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Document = Fixture.Document;
+	FText Error;
+	Document.SetTransform(FTransform(FRotator(0, 25, 0), FVector(100, 200, 80)), Error);
+	const FGuid First = Document.GetEntryId();
+	auto Extra = *Document.GetEntry();
+	Extra.LocalTransform.SetLocation(FVector(100, 200, 180));
+	Document.AddEntries(MakeArrayView(&Extra, 1));
+	const FGuid Second = Document.GetEntryId();
+	const TArray<FGuid> Sources{First, Second};
+	Document.SelectEntries(Sources);
+	const FVector Center(100, 350, 130), Normal(0, 1, 0);
+	const auto Before = *Document.GetVariant();
+	const bool bDirty = Fixture.Profile->GetOutermost()->IsDirty();
+	TArray<FDeepLevelCityBuildingDecorationEntry> Copies;
+	TestTrue(TEXT("Explicit placement works without a guessed calibrated center"), Document.BuildSymmetryPreview(Center, Normal, Copies, Error));
+	TestEqual(TEXT("Every selected source has a preview copy"), Copies.Num(), 2);
+	TestTrue(TEXT("Preview does not mutate authored entries or links"), FDeepLevelCityBuildingDecorationVariant::StaticStruct()->CompareScriptStruct(&Before, Document.GetVariant(), 0));
+	TestEqual(TEXT("Preview preserves package dirty state"), Fixture.Profile->GetOutermost()->IsDirty(), bDirty);
+	TestEqual(TEXT("Preview reflects across the supplied plane"), Copies[0].LocalTransform.GetLocation(), FVector(100, 500, 80));
+	TestTrue(TEXT("Confirm creates the whole mirror group"), Document.CreateSymmetryAt(Center, Normal, Error));
+	TestEqual(TEXT("Group confirmation adds two copies"), Document.GetVariant()->Entries.Num(), 4);
+	TestEqual(TEXT("Group confirmation adds two disjoint links"), Document.GetVariant()->SymmetryPairs.Num(), 2);
+	TestTrue(TEXT("Batch links are valid"), Document.GetVariant()->HasValidSymmetry());
+	FVector AverageCenter = FVector::ZeroVector;
+	for (const auto& Pair : Document.GetVariant()->SymmetryPairs) { AverageCenter += Document.GetSymmetryCenter(Pair); }
+	TestEqual(TEXT("The chosen center is the group's symmetry center"), AverageCenter / 2.0, Center);
+	Document.Undo();
+	TestEqual(TEXT("One undo removes the whole batch"), Document.GetVariant()->Entries.Num(), 2);
+	TestTrue(TEXT("Undo removes all batch metadata"), Document.GetVariant()->SymmetryPairs.IsEmpty());
+	Document.Redo();
+	TestTrue(TEXT("Redo restores every valid pair"), Document.GetVariant()->HasValidSymmetry() && Document.GetVariant()->SymmetryPairs.Num() == 2);
+	Document.UnlinkSymmetry();
+	TestTrue(TEXT("Unlink selection handles all selected pairs"), Document.GetVariant()->SymmetryPairs.IsEmpty());
+	TestEqual(TEXT("Unlink preserves all objects"), Document.GetVariant()->Entries.Num(), 4);
+	Document.SelectEntries(Sources);
+	const auto FirstPose = Document.GetEntry(First)->LocalTransform;
+	const auto SecondPose = Document.GetEntry(Second)->LocalTransform;
+	TestTrue(TEXT("Two existing selected objects can be linked directly"), Document.LinkSelectedPair());
+	TestTrue(TEXT("Linking existing selection preserves both poses"), Document.GetEntry(First)->LocalTransform.Equals(FirstPose) && Document.GetEntry(Second)->LocalTransform.Equals(SecondPose));
+	TestEqual(TEXT("Existing pair center is its endpoint midpoint"), Document.GetSelectionTransform().GetLocation(), (FirstPose.GetLocation() + SecondPose.GetLocation()) * 0.5);
+	TestTrue(TEXT("Selected existing pair is valid"), Document.GetVariant()->HasValidSymmetry());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationSymmetryPlacementTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.Symmetry.LivePlacement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationSymmetryPlacementTest::RunTest(const FString&)
+{
+	auto* Settings = GetMutableDefault<ULevelEditorViewportSettings>();
+	const bool bWasGridEnabled = Settings->GridEnabled;
+	ON_SCOPE_EXIT { Settings->GridEnabled = bWasGridEnabled; };
+	Settings->GridEnabled = false;
+	FDecorationFixture Fixture;
+	Fixture.Set->SetFlags(RF_Transient);
+	Fixture.Profile->SetFlags(RF_Transient);
+	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
+	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
+	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	const FGuid Source = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
+	Toolkit->SelectEntry(Source);
+	FText Error;
+	Toolkit->Document->SetTransform(FTransform(FVector(100, 200, 80)), Error);
+	const FVector Center(100, 400, 80);
+	const bool bDirty = Fixture.Profile->GetOutermost()->IsDirty();
+	Toolkit->BeginSymmetryPlacement();
+	TestTrue(TEXT("Auto mirror enters a placement mode"), Toolkit->IsPlacingSymmetry());
+	TestTrue(TEXT("Mouse placement builds a ghost before confirmation"), Toolkit->UpdateSymmetryPlacement(Center));
+	TestEqual(TEXT("Pending placement has a ghost actor"), Toolkit->Preview->GetSymmetryPreviewCount(), 1);
+	TestEqual(TEXT("Auto plane is inferred from cursor and selection"), Toolkit->GetSymmetryPlacementNormal(), FVector::RightVector);
+	AActor* Ghost = Toolkit->Preview->GetSymmetryPreviewActor(Source);
+	if (TestNotNull(TEXT("Ghost exists in the preview scene"), Ghost))
+	{
+		TestEqual(TEXT("Ghost is at the reflected location"), Ghost->GetActorLocation(), FVector(100, 600, 80));
+		TestTrue(TEXT("Ghost is transient"), Ghost->HasAnyFlags(RF_Transient));
+		TestFalse(TEXT("Ghost has no actor collision"), Ghost->GetActorEnableCollision());
+		TArray<UStaticMeshComponent*> Components;
+		Ghost->GetComponents(Components, true);
+		TestTrue(TEXT("Ghost retains its rendered geometry"), !Components.IsEmpty());
+		if (!Components.IsEmpty()) { TestTrue(TEXT("Ghost uses translucent preview material"), Components[0]->GetMaterial(0)->GetBlendMode() == BLEND_Translucent); }
+	}
+	TestEqual(TEXT("Pending ghosts are not authored entries"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
+	TestEqual(TEXT("Pending placement does not dirty the profile"), Fixture.Profile->GetOutermost()->IsDirty(), bDirty);
+	TestTrue(TEXT("Placement hides the editing gizmo"), Toolkit->Preview->GetClient()->GetWidgetMode() == UE::Widget::WM_None);
+	Toolkit->CancelSymmetryPlacement();
+	TestEqual(TEXT("Cancel destroys all ghosts"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
+	TestEqual(TEXT("Cancel preserves authored objects"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
+	Toolkit->BeginSymmetryPlacement();
+	Toolkit->UpdateSymmetryPlacement(Center);
+	TestTrue(TEXT("Click confirmation creates the mirror"), Toolkit->CommitSymmetryPlacement());
+	TestFalse(TEXT("Confirm leaves placement mode"), Toolkit->IsPlacingSymmetry());
+	TestEqual(TEXT("Confirm destroys temporary ghosts"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
+	TestEqual(TEXT("Confirmed placement has its baked mirror"), Toolkit->Document->GetVariant()->Entries.Num(), 2);
+	TestEqual(TEXT("Confirmed pivot is exactly between its objects"), Toolkit->Preview->GetClient()->GetWidgetLocation(), Center);
+	Toolkit->Document->Undo();
+	TestEqual(TEXT("One undo removes the confirmed mirror"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
+	Toolkit->SelectEntry(Source);
+	Toolkit->BeginSymmetryPlacement();
+	Toolkit->UpdateSymmetryPlacement(Center);
+	Toolkit->SelectEntry({});
+	TestFalse(TEXT("Selection change exits placement"), Toolkit->IsPlacingSymmetry());
+	TestEqual(TEXT("Selection change clears ghost actors"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
+	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationGroupScaleSpaceTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.MultiSelection.LocalScale",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationGroupScaleSpaceTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Document = Fixture.Document;
+	const FGuid First = Document.GetEntryId();
+	FText Error;
+	Document.SetTransform(FTransform(FVector(0, -100, 50)), Error);
+	auto Extra = *Document.GetEntry();
+	Extra.LocalTransform.SetLocation(FVector(0, 100, 50));
+	Document.AddEntries(MakeArrayView(&Extra, 1));
+	const TArray<FGuid> Ids{First, Document.GetEntryId()};
+	Document.SelectEntries(Ids);
+	Document.ApplySelectionDelta(FVector::ZeroVector, FRotator::ZeroRotator, FVector(1, 0, 0), FRotator(0, 90, 0).Quaternion());
+	Document.EndDrag();
+	TestTrue(TEXT("Local-X scaling expands along the rotated group axis"), Document.GetEntry(First)->LocalTransform.GetLocation().Equals(FVector(0, -200, 50), 0.001));
+	TestTrue(TEXT("The opposite member scales about the same centroid"), Document.GetEntry(Ids[1])->LocalTransform.GetLocation().Equals(FVector(0, 200, 50), 0.001));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationSymmetrySnappingTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.Symmetry.AxisAndGridSnap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationSymmetrySnappingTest::RunTest(const FString&)
+{
+	auto* Settings = GetMutableDefault<ULevelEditorViewportSettings>();
+	const bool bOldGrid = Settings->GridEnabled;
+	TGuardValue<bool> SnapActive(Settings->bSnappingActive, true);
+	TGuardValue<bool> DecimalSnap(Settings->bUsePowerOf2SnapSize, false);
+	TGuardValue<int32> GridIndex(Settings->CurrentPosGridSize, 0);
+	TGuardValue<TArray<float>> GridSizes(Settings->DecimalGridSizes, {50.0f, 100.0f});
+	ON_SCOPE_EXIT { Settings->GridEnabled = bOldGrid; };
+	Settings->GridEnabled = true;
+	FDecorationFixture Fixture;
+	Fixture.Set->SetFlags(RF_Transient);
+	Fixture.Profile->SetFlags(RF_Transient);
+	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
+	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
+	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	const FGuid Source = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
+	Toolkit->SelectEntry(Source);
+	const FVector Origin(13, 17, 5);
+	FText Error;
+	Toolkit->Document->SetTransform(FTransform(Origin), Error);
+	const auto Client = Toolkit->Preview->GetClient();
+	Client->SetWidgetCoordSystemSpace(COORD_World);
+	FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(Client->Viewport, Client->GetScene(), Client->EngineShowFlags));
+	FSceneViewInitOptions Options;
+	Options.ViewFamily = &Family;
+	Options.SetViewRectangle(FIntRect(0, 0, 1000, 1000));
+	Options.ViewRotationMatrix = FMatrix::Identity;
+	Options.ProjectionMatrix = FMatrix::Identity;
+	Options.ProjectionMatrix.M[0][0] = 0.002f;
+	Options.ProjectionMatrix.M[1][1] = 0.002f;
+	FSceneView View(Options);
+	Toolkit->BeginSymmetryPlacement();
+	TestTrue(TEXT("Cursor near X can preview"), Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View));
+	TestTrue(TEXT("A nearby axis is acquired automatically"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
+	TestTrue(TEXT("Axis attraction also removes off-axis movement"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 0, 0), 0.001));
+	TestTrue(TEXT("HUD reports the active global grid step"), Toolkit->GetViewportStatus().ToString().Contains(FText::AsNumber(50).ToString()));
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 18, 0), &View);
+	TestTrue(TEXT("Release hysteresis keeps an acquired guide stable"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
+	TestTrue(TEXT("Moving away releases axis attraction"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
+	TestTrue(TEXT("Free movement still follows the grid"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 50, 0), 0.001));
+	Settings->CurrentPosGridSize = 1;
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
+	TestTrue(TEXT("Changing the shared toolbar step changes placement immediately"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(200, 0, 0), 0.001));
+	Settings->GridEnabled = false;
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
+	TestTrue(TEXT("Disabling grid leaves axis attraction available"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 0, 0), 0.001));
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View, true);
+	TestTrue(TEXT("Holding Shift bypasses axis attraction"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
+	TestTrue(TEXT("Free modifier retains the exact unsnapped cursor pose"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 8, 0), 0.001));
+	Toolkit->ToggleSymmetryPlacementAxis(EAxis::Z);
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 90), &View);
+	TestTrue(TEXT("Manual lock projects the center onto Z"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(0, 0, 90), 0.001));
+	Toolkit->ToggleSymmetryPlacementAxis(EAxis::Z);
+	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
+	TestTrue(TEXT("Repeating the axis key restores automatic/free placement"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
+	Toolkit->CancelSymmetryPlacement();
+	const FQuat Basis = FRotator(0, 45, 0).Quaternion();
+	Toolkit->Document->SetTransform(FTransform(Basis, Origin), Error);
+	Client->SetWidgetCoordSystemSpace(COORD_Local);
+	Settings->GridEnabled = true;
+	Settings->CurrentPosGridSize = 0;
+	Toolkit->BeginSymmetryPlacement();
+	Toolkit->UpdateSymmetryPlacement(Origin + Basis.RotateVector(FVector(173, 8, 0)), &View);
+	const FVector LocalCenter = Origin + Basis.RotateVector(FVector(150, 0, 0));
+	TestTrue(TEXT("Local guide attraction respects the gizmo basis"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
+	TestTrue(TEXT("Grid steps follow the rotated local guide"), Toolkit->GetSymmetryPlacementCenter().Equals(LocalCenter, 0.001));
+	TestTrue(TEXT("Confirmation keeps the snapped preview"), Toolkit->CommitSymmetryPlacement());
+	TestTrue(TEXT("Confirmed pair midpoint matches its snapped center"), Toolkit->GetSelectionTransform().GetLocation().Equals(LocalCenter, 0.001));
+	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
 	return true;
 }
 
