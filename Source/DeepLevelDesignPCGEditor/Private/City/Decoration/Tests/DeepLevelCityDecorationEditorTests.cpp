@@ -9,6 +9,8 @@
 #include "City/Decoration/Tests/DeepLevelCityDecorationPreviewTestBuilding.h"
 #include "City/Decoration/DeepLevelCityDecorationValidation.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/DecalComponent.h"
+#include "Engine/DecalActor.h"
 #include "Engine/World.h"
 #include "Slate/SceneViewport.h"
 #include "EngineUtils.h"
@@ -224,6 +226,36 @@ namespace
 			Document.SelectEntry(Profile->Variants[0].Entries[0].EntryGuid);
 		}
 	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationDecalPreviewTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.DecalPreview",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationDecalPreviewTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Entry = Fixture.Profile->Variants[0].Entries[0];
+	Entry.Output = EDeepLevelCityDecorationOutput::Decal;
+	Entry.Mesh.Reset();
+	Entry.DecalMaterial = UMaterial::GetDefaultMaterial(MD_DeferredDecal);
+	Entry.DecalSize = FVector(4, 22, 160);
+	Entry.LocalTransform = FTransform(FRotator(0, -90, 0), FVector(1290, 851, 380), FVector(1.5, 1, 2));
+	const auto Preview = SNew(SDeepLevelCityBuildingDecorationViewport);
+	Preview->Synchronize(Fixture.Profile->BuildingClass, Fixture.Profile.Get(), Fixture.Document.GetVariantId());
+	auto* Actor = Cast<ADecalActor>(Preview->GetEntryActor(Entry.EntryGuid));
+	if (!TestNotNull(TEXT("Decal preview exists"), Actor)) { return false; }
+	TestTrue(TEXT("Initial projector pose matches the profile without the actor default rotation"),
+		Actor->GetDecal()->GetComponentTransform().Equals(Entry.LocalTransform));
+	const FBox InitialBounds = Actor->GetDecal()->Bounds.GetBox();
+	Entry.DecalSize = FVector(8, 40, 80);
+	Preview->Synchronize(Fixture.Profile->BuildingClass, Fixture.Profile.Get(), Fixture.Document.GetVariantId());
+	TestTrue(TEXT("Resize retains the preview actor"), Preview->GetEntryActor(Entry.EntryGuid) == Actor);
+	TestEqual(TEXT("Resize updates projector dimensions"), Actor->GetDecal()->DecalSize, Entry.DecalSize);
+	TestFalse(TEXT("Resize refreshes culling bounds without moving the projector"),
+		Actor->GetDecal()->Bounds.GetBox().Equals(InitialBounds));
+	TestTrue(TEXT("Resize preserves the authored pose"), Actor->GetActorTransform().Equals(Entry.LocalTransform));
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationCatalogOwnershipTest,

@@ -6,6 +6,8 @@ Use a Building Placement Catalog to calibrate buildings, then assign their decor
 
 The building calibration and decoration viewports use the same exposure colors and labels: required is green, preferred blue, neutral gray and forbidden red. These guides describe the calibrated placement volume.
 
+Exposure rules constrain building placement; profiles do not filter individual decorations against neighboring buildings. Use a required street-facing facade for essential signage. Decal poses describe the projector directly; size is its local X/Y/Z half-extents, with X controlling projection depth. The preview applies the same pose as generated output and refreshes the projector when its dimensions change.
+
 Selecting a different building frames its bounds from the highest-priority exposure direction. Equally ranked adjacent faces produce a diagonal view showing both. Changing variants or refreshing the same building preserves the camera, so placements can be compared without losing the viewing angle.
 
 ## Selecting and transforming

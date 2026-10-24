@@ -352,6 +352,8 @@ AActor* SDeepLevelCityBuildingDecorationViewport::SpawnEntry(const FDeepLevelCit
 	case EDeepLevelCityDecorationOutput::Decal:
 		if (auto* Actor = Cast<ADecalActor>(Spawn(ADecalActor::StaticClass(), Entry.LocalTransform)))
 		{
+			// SpawnActor composes the decal root's default downward rotation with the spawn pose.
+			Actor->SetActorTransform(Entry.LocalTransform);
 			Actor->GetDecal()->DecalSize = Entry.DecalSize;
 			Actor->SetDecalMaterial(Entry.DecalMaterial.LoadSynchronous());
 			return Actor;
@@ -420,7 +422,12 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 					Actor->SetActorTransform(Entry.LocalTransform);
 					DecorationSurfaces.FindChecked(Entry.EntryGuid).UpdateActorTransform(Entry.LocalTransform);
 				}
-				if (auto* Decal = Cast<ADecalActor>(Actor)) { Decal->GetDecal()->DecalSize = Entry.DecalSize; }
+				if (auto* Decal = Cast<ADecalActor>(Actor); Decal && !Decal->GetDecal()->DecalSize.Equals(Entry.DecalSize))
+				{
+					Decal->GetDecal()->DecalSize = Entry.DecalSize;
+					Decal->GetDecal()->MarkRenderStateDirty();
+					Decal->GetDecal()->UpdateBounds();
+				}
 			}
 			PreviewEntries.Add(Entry.EntryGuid, Entry);
 		}
