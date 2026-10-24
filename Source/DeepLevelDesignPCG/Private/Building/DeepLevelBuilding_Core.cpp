@@ -245,7 +245,20 @@ bool ADeepLevelPCGBuildingLineActor::BuildCityLayoutFragment(
 		return false;
 	}
 	OutFragment = PreparedLayout->Fragment;
-	if (bOutputCurrent) { OutFragment.Buildings = GeneratedFragment.Buildings; }
+	if (bOutputCurrent)
+	{
+		OutFragment.Buildings = GeneratedFragment.Buildings;
+		if (!OutFragment.Buildings.IsEmpty())
+		{
+			const UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+			if (!LoadedCatalog)
+			{
+				OutError = NSLOCTEXT("DeepLevelBuildingLine", "MissingPublishedCatalog", "Building publication requires its calibrated catalog.");
+				return false;
+			}
+			if (!DeepLevelBuildingLayout::PopulateFacadeGeometry(OutFragment.Buildings, *LoadedCatalog, OutError)) { return false; }
+		}
+	}
 	return true;
 }
 

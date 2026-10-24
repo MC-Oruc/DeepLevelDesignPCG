@@ -240,3 +240,19 @@ Automation now also covers Road catalog transactions/strict schema/grid ownershi
 Current Road/Building verification: the SoCEditor Development build passed and all 92 DeepLevelDesignPCG automation tests passed. Regression checks also cover reported world coordinates after a City-origin change, copied frontage positions/tangents, and pending-call cleanup at plugin shutdown. World capture framing includes the target's own PCG-managed actors; it does not scan the world for alternative output ownership. This run did not verify live MCP transport, Road/Building GPU capture or production generation. Restart the editor with the new binary before using the changed native async Execute signature.
 
 Live read-only verification after editor restart: the native MCP server and toolset discovery responded successfully. Describe advertised exactly two tools and three domains. Execute returned success for existing Road and Building catalogs and the City Decoration Set with empty operations, dryRun:true, save:false and capture:false. All three responses reported applied/saved/generated/captured:false. Road and Building catalogs reported validForGeneration:true. No production asset/map was edited or saved; no generation, capture or PIE was started.
+
+## Facade visibility
+
+The City Decoration DSL accepts `facade` on `entry.add` and `entry.update`:
+
+```json
+{"op":"entry.add","variant":"$variant","asset":"/Game/Example/Mesh.Mesh","facade":"auto"}
+```
+
+Or explicitly associate an entry with multiple eligible faces (OR visibility):
+
+```json
+{"op":"entry.update","variant":"$variant","entry":"$entry","facade":["PositiveX","NegativeY"]}
+```
+
+Allowed face strings are `PositiveX`, `NegativeX`, `PositiveY`, and `NegativeY`, with exact spelling. Omit `facade` to preserve the current value during update. Empty arrays, duplicate faces, invalid names, and strings other than `auto` fail strict validation. State output emits `"auto"` or the explicit face array. Auto uses the nearest geometric face; if it is forbidden or not visible, the decoration is skipped without another-face fallback. Explicit faces use OR visibility.

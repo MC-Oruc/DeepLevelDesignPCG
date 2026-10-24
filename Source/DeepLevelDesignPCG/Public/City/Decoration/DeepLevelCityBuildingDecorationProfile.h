@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "City/DeepLevelCityDecoration.h"
+#include "Building/DeepLevelBuildingFacadeVisibility.h"
 #include "Engine/DataAsset.h"
 #include "DeepLevelCityBuildingDecorationProfile.generated.h"
 
@@ -35,6 +36,12 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuildingDecorationEntry
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
 	FTransform LocalTransform = FTransform::Identity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Facade")
+	bool bAutoFacade = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Facade", meta = (EditCondition = "!bAutoFacade", EditConditionHides))
+	TArray<EDeepLevelBuildingVolumeFace> Facades;
 
 	bool Validate(FText& Error) const;
 };

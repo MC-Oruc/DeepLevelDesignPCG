@@ -290,6 +290,7 @@ public:
 	SLATE_END_ARGS()
 	void Construct(const FArguments& Args);
 	virtual ~SDeepLevelCityBuildingDecorationViewport() override;
+	void ShutdownPreview();
 	void Synchronize(const TSoftClassPtr<AActor>& BuildingClass, const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId);
 	void SetPlacementGuide(const FDeepLevelBuildingPlacementDefinition* Definition, bool bShowBounds = true);
 	void DrawExposureLabels(const FSceneView* View, FCanvas* Canvas) const;
@@ -332,4 +333,6 @@ private:
 	TOptional<FDeepLevelBuildingPlacementVolume> PlacementGuide;
 	bool bDrawPlacementBounds = true;
 	FDeepLevelCityDecorationSurface Surface;
+	FDelegateHandle EditorPreExitHandle;
+	bool bPreviewShutdown = false;
 };

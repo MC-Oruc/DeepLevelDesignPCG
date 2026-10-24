@@ -20,6 +20,7 @@ bool FDeepLevelCityBuildingSnapshotTest::RunTest(const FString& Parameters)
 	Building.StableId = FDeepLevelCityStableId::MakeBuildingId(Fragment.SourceGuid, FGuid(), 0);
 	Building.BuildingClass = APackedLevelActor::StaticClass();
 	Building.Transform = FTransform(FRotator(0.0, 45.0, 0.0), FVector(100.0, 200.0, 300.0));
+	Building.FacadeGeometry.Extent = FVector(100.0, 100.0, 300.0);
 	FText Error;
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> First;
 	if (!TestTrue(TEXT("Building-only fragment builds without anchors or occupancy"),
@@ -36,6 +37,12 @@ bool FDeepLevelCityBuildingSnapshotTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Initial building dirties its chunk without an anchor"), Dirty.Contains(FIntPoint::ZeroValue));
 	FDeepLevelCityLayoutBuilder::FindDirtyChunks(First.Get(), *First, Dirty);
 	TestEqual(TEXT("Unchanged building keeps chunks clean"), Dirty.Num(), 0);
+	Building.FacadeGeometry.ForbiddenFaces = 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::PositiveX);
+	TSharedPtr<const FDeepLevelCityLayoutSnapshot> FacadeChanged;
+	if (!TestTrue(TEXT("Facade metadata change builds"), FDeepLevelCityLayoutBuilder::Build(Grid, {Fragment}, FacadeChanged, Error))) { return false; }
+	FDeepLevelCityLayoutBuilder::FindDirtyChunks(First.Get(), *FacadeChanged, Dirty);
+	TestTrue(TEXT("Facade metadata change dirties the building footprint chunk"), Dirty.Contains(FIntPoint::ZeroValue));
+	Building.FacadeGeometry.ForbiddenFaces = 0;
 
 	Building.Transform.SetLocation(FVector(4500.0, 0.0, 300.0));
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Moved;
@@ -80,6 +87,7 @@ bool FDeepLevelCityBuildingValidationTest::RunTest(const FString& Parameters)
 	FDeepLevelCityBuilding Valid;
 	Valid.StableId = FDeepLevelCityStableId::MakeBuildingId(Fragment.SourceGuid, FGuid(), 0);
 	Valid.BuildingClass = APackedLevelActor::StaticClass();
+	Valid.FacadeGeometry.Extent = FVector(100.0, 100.0, 300.0);
 	Fragment.Buildings.Add(Valid);
 	Fragment.Buildings.Add(Valid);
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
@@ -94,6 +102,9 @@ bool FDeepLevelCityBuildingValidationTest::RunTest(const FString& Parameters)
 	Fragment.Buildings[0] = Valid;
 	Fragment.Buildings[0].Transform.SetRotation(FQuat(0.0, 0.0, 0.0, 0.0));
 	TestFalse(TEXT("Invalid transform is rejected"), FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error));
+	Fragment.Buildings[0] = Valid;
+	Fragment.Buildings[0].FacadeGeometry.Extent = FVector::ZeroVector;
+	TestFalse(TEXT("Uncalibrated facade geometry is rejected"), FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error));
 	TestFalse(TEXT("Rejected snapshot is not published"), Snapshot.IsValid());
 	return true;
 }

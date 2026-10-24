@@ -19,6 +19,6 @@ public class DeepLevelDesignPCG : ModuleRules
                 "PCG",
             });
 
-        PrivateDependencyModuleNames.AddRange(new[] { "Json" });
+        PrivateDependencyModuleNames.AddRange(new[] { "Json", "GeometryCore", "GeometryAlgorithms" });
     }
 }

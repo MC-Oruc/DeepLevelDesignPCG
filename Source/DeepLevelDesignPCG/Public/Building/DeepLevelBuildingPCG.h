@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Building/DeepLevelBuildingFacadeVisibility.h"
 #include "PCGSettings.h"
 #include "Components/SplineComponent.h"
 #include "Engine/DataAsset.h"
@@ -83,15 +84,6 @@ public:
 
 
 class AActor;
-
-UENUM(BlueprintType)
-enum class EDeepLevelBuildingVolumeFace : uint8
-{
-	PositiveX,
-	NegativeX,
-	PositiveY,
-	NegativeY
-};
 
 UENUM(BlueprintType)
 enum class EDeepLevelStreetExposureRule : uint8

@@ -33,6 +33,9 @@ namespace DeepLevelCityBuildingDecorationTests
 		Decal.Output = EDeepLevelCityDecorationOutput::Decal;
 		Decal.DecalMaterial = UMaterial::GetDefaultMaterial(MD_DeferredDecal);
 		Decal.DecalSize = FVector(10.0, 30.0, 40.0);
+		Decal.LocalTransform.SetLocation(FVector(3000.0, 50.0, 0.0));
+		Decal.bAutoFacade = false;
+		Decal.Facades = {EDeepLevelBuildingVolumeFace::PositiveX, EDeepLevelBuildingVolumeFace::PositiveY};
 		Variant.Entries.Add(Decal);
 		FDeepLevelCityBuildingDecorationVariant Empty;
 		Empty.VariantGuid = FGuid(14, 1, 1, 1);
@@ -51,6 +54,15 @@ namespace DeepLevelCityBuildingDecorationTests
 			Building.StableId = FDeepLevelCityStableId::MakeBuildingId(Fragment.SourceGuid, FGuid(), Index);
 			Building.BuildingClass = APackedLevelActor::StaticClass();
 			Building.Transform = FTransform(FRotator(0.0, 90.0, 0.0), FVector(Index * 5000.0, 0.0, 0.0), FVector(2.0));
+			Building.FacadeGeometry.Extent = FVector(3000.0, 50.0, 500.0);
+			Building.FacadeGeometry.LocalFrame = FTransform::Identity;
+			for (const EDeepLevelBuildingVolumeFace Face : {EDeepLevelBuildingVolumeFace::PositiveX, EDeepLevelBuildingVolumeFace::NegativeX, EDeepLevelBuildingVolumeFace::PositiveY, EDeepLevelBuildingVolumeFace::NegativeY})
+			{
+				FDeepLevelBuildingFacadeSpan& Span = Building.VisibleFacades.Emplace_GetRef();
+				Span.Face = Face;
+				Span.Start = 0.0;
+				Span.End = 1.0;
+			}
 		}
 		return Fragment;
 	}
@@ -85,6 +97,30 @@ bool FDeepLevelCityBuildingDecorationResolveTest::RunTest(const FString& Paramet
 		TestEqual(TEXT("Chunk follows decoration position"), Placement.Chunk, Snapshot->GetGrid().CellToChunk(Snapshot->GetGrid().WorldToCell(Placement.Transform.GetLocation())));
 	}
 	TestEqual(TEXT("Repeated buildings have independent output identities"), Ids.Num(), 6);
+	const uint8 PositiveXMask = 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::PositiveX);
+	Fragment.Buildings[0].FacadeGeometry.ForbiddenFaces |= PositiveXMask;
+	FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error);
+	TArray<FDeepLevelCityResolvedDecoration> Filtered;
+	TestTrue(TEXT("Forbidden nearest face resolves without fallback"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Filtered, Error));
+	TestEqual(TEXT("Forbidden automatic face skips entries while explicit corner face uses OR"), Filtered.Num(), 5);
+	for (const auto& Placement : Filtered)
+	{
+		TestEqual(TEXT("Visibility filtering preserves selected variant"), Placement.VariantId, Profile->Variants[0].VariantGuid);
+		TestTrue(TEXT("Visibility filtering preserves stable placement identity"), First.ContainsByPredicate([&Placement](const auto& Baseline) { return Baseline.StableId == Placement.StableId; }));
+	}
+	Fragment.Buildings[0].FacadeGeometry.ForbiddenFaces = 0;
+	const FTransform BuildingTransform = Fragment.Buildings[0].Transform;
+	FDeepLevelCityBuilding& Neighbor = Fragment.Buildings.Emplace_GetRef();
+	Neighbor.StableId = FDeepLevelCityStableId::MakeBuildingId(Fragment.SourceGuid, FGuid(), 2);
+	Neighbor.BuildingClass = AActor::StaticClass();
+	Neighbor.FacadeGeometry.Extent = FVector(100.0, 40.0, 500.0);
+	Neighbor.Transform = FTransform(BuildingTransform.GetRotation(),
+		BuildingTransform.TransformPosition(FVector(3100.0, -10.0, 0.0)), BuildingTransform.GetScale3D());
+	if (!TestTrue(TEXT("Neighbor creates a partial exposed facade"), FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error))) { return false; }
+	TestTrue(TEXT("Partial facade interval resolves"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Filtered, Error));
+	TestEqual(TEXT("Points outside visible interval are omitted"), Filtered.Num(), 5);
+	Fragment = MakeBuildings();
+	FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error);
 	TArray<FDeepLevelCityResolvedDecoration> Repeated;
 	FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Repeated, Error);
 	TestEqual(TEXT("Repeat preserves output count"), Repeated.Num(), First.Num());
@@ -170,6 +206,13 @@ bool FDeepLevelCityBuildingDecorationValidationTest::RunTest(const FString& Para
 	Profile = MakeProfile();
 	Profile->Variants[0].Entries[2].DecalSize.X = 0.0;
 	TestFalse(TEXT("Zero decal projection depth fails"), Profile->Validate(Error));
+	Profile = MakeProfile();
+	Profile->Variants[0].Entries[0].bAutoFacade = false;
+	TestFalse(TEXT("Empty explicit facade list fails"), Profile->Validate(Error));
+	Profile->Variants[0].Entries[0].Facades = {EDeepLevelBuildingVolumeFace::PositiveX, EDeepLevelBuildingVolumeFace::PositiveX};
+	TestFalse(TEXT("Duplicate explicit facade fails"), Profile->Validate(Error));
+	Profile->Variants[0].Entries[0].Facades = {static_cast<EDeepLevelBuildingVolumeFace>(255)};
+	TestFalse(TEXT("Invalid explicit facade enum fails"), Profile->Validate(Error));
 	Profile = MakeProfile();
 	Profile->Variants[1].VariantGuid = Profile->Variants[0].VariantGuid;
 	TestFalse(TEXT("Duplicate variant IDs fail"), Profile->Validate(Error));

@@ -25,25 +25,64 @@ namespace
 	}
 }
 
-TArray<FDeepLevelCityBuilding> DeepLevelBuildingLayout::BuildPublishedBuildings(
+bool DeepLevelBuildingLayout::BuildPublishedBuildings(
 	const FGuid& SourceGuid,
 	const FDeepLevelBuildingLinePlan& Plan,
-	const TConstArrayView<FTransform> VerifiedTransforms)
+	const TConstArrayView<FTransform> VerifiedTransforms,
+	const UDeepLevelBuildingPlacementCatalog& Catalog,
+	TArray<FDeepLevelCityBuilding>& OutBuildings,
+	FText& OutError)
 {
-	check(Plan.Placements.Num() == VerifiedTransforms.Num());
-	TArray<FDeepLevelCityBuilding> Buildings;
-	Buildings.Reserve(Plan.Placements.Num());
+	OutBuildings.Reset();
+	if (Plan.Placements.Num() != VerifiedTransforms.Num())
+	{
+		OutError = LOCTEXT("PublishedTransformCount", "Building publication requires one verified transform per planned placement.");
+		return false;
+	}
+	OutBuildings.Reserve(Plan.Placements.Num());
 	TMap<FGuid, int32> FrontageIndices;
 	for (int32 Index = 0; Index < Plan.Placements.Num(); ++Index)
 	{
 		const FDeepLevelBuildingLinePlacement& Placement = Plan.Placements[Index];
 		int32& FrontageIndex = FrontageIndices.FindOrAdd(Placement.FrontageId);
-		FDeepLevelCityBuilding& Building = Buildings.Emplace_GetRef();
+		FDeepLevelCityBuilding& Building = OutBuildings.Emplace_GetRef();
 		Building.StableId = FDeepLevelCityStableId::MakeBuildingId(SourceGuid, Placement.FrontageId, FrontageIndex++);
 		Building.BuildingClass = Placement.BuildingClass;
 		Building.Transform = VerifiedTransforms[Index];
 	}
-	return Buildings;
+	return PopulateFacadeGeometry(OutBuildings, Catalog, OutError);
+}
+
+bool DeepLevelBuildingLayout::PopulateFacadeGeometry(
+	TArray<FDeepLevelCityBuilding>& Buildings,
+	const UDeepLevelBuildingPlacementCatalog& Catalog,
+	FText& OutError)
+{
+	for (FDeepLevelCityBuilding& Building : Buildings)
+	{
+		const FDeepLevelBuildingPlacementDefinition* Definition = Catalog.Buildings.FindByPredicate(
+			[&Building](const FDeepLevelBuildingPlacementDefinition& Entry) { return Entry.BuildingClass == Building.BuildingClass; });
+		if (!Definition)
+		{
+			OutError = LOCTEXT("PublishedBuildingDefinitionMissing", "Building publication could not find the calibrated catalog definition for a published class.");
+			return false;
+		}
+		const FDeepLevelBuildingPlacementVolume& Volume = Definition->PlacementVolume;
+		Building.FacadeGeometry.LocalFrame = FTransform(Volume.Rotation, Volume.Center);
+		Building.FacadeGeometry.Extent = Volume.Extent;
+		Building.FacadeGeometry.ForbiddenFaces = 0;
+		if (Volume.Exposure.PositiveX == EDeepLevelStreetExposureRule::Forbidden) { Building.FacadeGeometry.ForbiddenFaces |= 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::PositiveX); }
+		if (Volume.Exposure.NegativeX == EDeepLevelStreetExposureRule::Forbidden) { Building.FacadeGeometry.ForbiddenFaces |= 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::NegativeX); }
+		if (Volume.Exposure.PositiveY == EDeepLevelStreetExposureRule::Forbidden) { Building.FacadeGeometry.ForbiddenFaces |= 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::PositiveY); }
+		if (Volume.Exposure.NegativeY == EDeepLevelStreetExposureRule::Forbidden) { Building.FacadeGeometry.ForbiddenFaces |= 1u << static_cast<uint8>(EDeepLevelBuildingVolumeFace::NegativeY); }
+		if (!Building.FacadeGeometry.IsValid())
+		{
+			OutError = LOCTEXT("InvalidPublishedFacadeGeometry", "Building catalog contains invalid calibrated facade geometry.");
+			return false;
+		}
+	}
+	OutError = FText::GetEmpty();
+	return true;
 }
 
 uint32 ADeepLevelPCGBuildingLineActor::GetInputKey() const
@@ -278,8 +317,16 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 		return;
 	}
 	GeneratedFragment = GeneratingLayout->Fragment;
-	GeneratedFragment.Buildings = DeepLevelBuildingLayout::BuildPublishedBuildings(
-		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms);
+	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog || !DeepLevelBuildingLayout::BuildPublishedBuildings(
+		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms, *LoadedCatalog, GeneratedFragment.Buildings, Error))
+	{
+		if (!LoadedCatalog) { Error = LOCTEXT("MissingPublishedCatalog", "Building publication requires its calibrated catalog."); }
+		LastGenerationError = Error;
+		GeneratingLayout.Reset();
+		BroadcastBuildingFailure(LastGenerationError);
+		return;
+	}
 	GeneratedInputKey = GeneratingLayout->InputKey;
 	bOutputCurrent = true;
 	GeneratingLayout.Reset();

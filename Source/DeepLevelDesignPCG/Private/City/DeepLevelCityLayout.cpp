@@ -42,6 +42,55 @@ namespace
 	{
 		Chunks.Add(Grid.CellToChunk(Cell));
 	}
+
+	void AddBuildingChunks(const FDeepLevelCityGrid& Grid, const FDeepLevelCityBuilding& Building, TSet<FIntPoint>& Chunks)
+	{
+		const FTransform Frame = Building.FacadeGeometry.LocalFrame * Building.Transform;
+		const FVector Extent = Building.FacadeGeometry.Extent;
+		FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+		FVector2D Max(-TNumericLimits<double>::Max(), -TNumericLimits<double>::Max());
+		for (int32 Corner = 0; Corner < 4; ++Corner)
+		{
+			const FVector Point = Frame.TransformPosition(FVector(
+				(Corner & 1) ? Extent.X : -Extent.X,
+				(Corner & 2) ? Extent.Y : -Extent.Y,
+				0.0));
+			const FIntPoint Cell = Grid.WorldToCell(Point);
+			Min.X = FMath::Min(Min.X, Cell.X);
+			Min.Y = FMath::Min(Min.Y, Cell.Y);
+			Max.X = FMath::Max(Max.X, Cell.X);
+			Max.Y = FMath::Max(Max.Y, Cell.Y);
+		}
+		const FIntPoint MinChunk = Grid.CellToChunk(FIntPoint(FMath::FloorToInt(Min.X), FMath::FloorToInt(Min.Y)));
+		const FIntPoint MaxChunk = Grid.CellToChunk(FIntPoint(FMath::FloorToInt(Max.X), FMath::FloorToInt(Max.Y)));
+		for (int32 X = MinChunk.X; X <= MaxChunk.X; ++X)
+		{
+			for (int32 Y = MinChunk.Y; Y <= MaxChunk.Y; ++Y) { Chunks.Add(FIntPoint(X, Y)); }
+		}
+	}
+
+	bool SameFacadeData(const FDeepLevelCityBuilding& A, const FDeepLevelCityBuilding& B)
+	{
+		if (!A.FacadeGeometry.LocalFrame.Equals(B.FacadeGeometry.LocalFrame)
+			|| !A.FacadeGeometry.Extent.Equals(B.FacadeGeometry.Extent)
+			|| A.FacadeGeometry.ForbiddenFaces != B.FacadeGeometry.ForbiddenFaces
+			|| A.NeighborFaces != B.NeighborFaces || A.EnclosedFaces != B.EnclosedFaces
+			|| A.VisibleFacades.Num() != B.VisibleFacades.Num())
+		{
+			return false;
+		}
+		for (int32 Index = 0; Index < A.VisibleFacades.Num(); ++Index)
+		{
+			const FDeepLevelBuildingFacadeSpan& Left = A.VisibleFacades[Index];
+			const FDeepLevelBuildingFacadeSpan& Right = B.VisibleFacades[Index];
+			if (Left.Face != Right.Face || !FMath::IsNearlyEqual(Left.Start, Right.Start)
+				|| !FMath::IsNearlyEqual(Left.End, Right.End))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 ADeepLevelCityLayoutActor::ADeepLevelCityLayoutActor()
@@ -267,7 +316,7 @@ bool FDeepLevelCityLayoutBuilder::Build(
 		{
 			if (!Building.StableId.IsValid() || BuildingIds.Contains(Building.StableId)
 				|| Building.BuildingClass.IsNull() || !Building.BuildingClass.ToSoftObjectPath().IsValid()
-				|| !Building.Transform.IsValid())
+				|| !Building.Transform.IsValid() || !Building.FacadeGeometry.IsValid())
 			{
 				OutError = LOCTEXT("InvalidCityBuilding", "City Layout contains an invalid or duplicate building placement.");
 				return false;
@@ -297,11 +346,12 @@ bool FDeepLevelCityLayoutBuilder::Build(
 	{
 		return A.StableId < B.StableId;
 	});
-	OutSnapshot = Snapshot;
 	Snapshot->Buildings.Sort([](const FDeepLevelCityBuilding& A, const FDeepLevelCityBuilding& B)
 	{
 		return A.StableId < B.StableId;
 	});
+	if (!DeepLevelBuildingFacades::Resolve(Snapshot->Buildings, Snapshot->Grid, Snapshot->Cells, OutError)) { return false; }
+	OutSnapshot = Snapshot;
 	OutError = FText::GetEmpty();
 	return true;
 }
@@ -316,7 +366,7 @@ void FDeepLevelCityLayoutBuilder::FindDirtyChunks(
 	{
 		for (const FDeepLevelCityBuilding& Building : Current.Buildings)
 		{
-			AddCellChunk(Current.Grid, Current.Grid.WorldToCell(Building.Transform.GetLocation()), OutDirtyChunks);
+			AddBuildingChunks(Current.Grid, Building, OutDirtyChunks);
 		}
 		for (const TPair<FIntPoint, FDeepLevelCityCellState>& Pair : Current.Cells)
 		{
@@ -342,19 +392,19 @@ void FDeepLevelCityLayoutBuilder::FindDirtyChunks(
 		const FDeepLevelCityBuilding* Old = PreviousBuildings.FindRef(Building.StableId);
 		if (!Old || Old->BuildingClass != Building.BuildingClass
 			|| Old->SourceGuid != Building.SourceGuid || Old->SourceRevision != Building.SourceRevision
-			|| !Old->Transform.Equals(Building.Transform))
+			|| !Old->Transform.Equals(Building.Transform) || !SameFacadeData(*Old, Building))
 		{
-			AddCellChunk(Current.Grid, Current.Grid.WorldToCell(Building.Transform.GetLocation()), OutDirtyChunks);
+			AddBuildingChunks(Current.Grid, Building, OutDirtyChunks);
 			if (Old)
 			{
-				AddCellChunk(Previous->Grid, Previous->Grid.WorldToCell(Old->Transform.GetLocation()), OutDirtyChunks);
+				AddBuildingChunks(Previous->Grid, *Old, OutDirtyChunks);
 			}
 		}
 		PreviousBuildings.Remove(Building.StableId);
 	}
 	for (const auto& Pair : PreviousBuildings)
 	{
-		AddCellChunk(Previous->Grid, Previous->Grid.WorldToCell(Pair.Value->Transform.GetLocation()), OutDirtyChunks);
+		AddBuildingChunks(Previous->Grid, *Pair.Value, OutDirtyChunks);
 	}
 
 	TSet<FIntPoint> AllCells;

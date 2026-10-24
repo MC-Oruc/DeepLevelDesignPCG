@@ -44,7 +44,7 @@ namespace
 		{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[10,20,100],"as":"a"},
 		{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Sphere.Sphere","location":[10,-20,100],"as":"b"},
 		{"op":"link.create","variant":"$v","entry":"$a","target":"$b","axis":"Y","syncScale":false,"rotationMode":"copy","rotationOffset":[10,0,0]},
-		{"op":"entry.update","variant":"$v","entry":"$a","location":[40,30,200],"rotation":[0,20,0],"scale":[2,2,2]}
+		{"op":"entry.update","variant":"$v","entry":"$a","location":[40,30,200],"rotation":[0,20,0],"scale":[2,2,2],"facade":["PositiveX","NegativeY"]}
 	])JSON");
 }
 
@@ -72,12 +72,18 @@ bool FDeepLevelPCGDSLBatchTest::RunTest(const FString&)
 	TestTrue(TEXT("Copy rotation includes target offset"), Variant.Entries[1].LocalTransform.GetRotation().Equals(FRotator(10,20,0).Quaternion(), 0.0001));
 	TestEqual(TEXT("Disabled scale sync preserves target scale"), Variant.Entries[1].LocalTransform.GetScale3D(), FVector::OneVector);
 	TestTrue(TEXT("Linked assets can differ"), Variant.Entries[0].Mesh != Variant.Entries[1].Mesh);
+	TestFalse(TEXT("Explicit face array disables auto facade"), Variant.Entries[0].bAutoFacade);
+	TestEqual(TEXT("Explicit face array preserves both OR faces"), Variant.Entries[0].Facades.Num(), 2);
+	TestTrue(TEXT("Omitted update field preserves auto facade"), Variant.Entries[1].bAutoFacade);
 	Observer.Undo();
 	TestTrue(TEXT("One undo removes the entire batch, including staged operations"), F.Profile->Variants.IsEmpty());
 	Observer.Redo();
 	TestEqual(TEXT("One redo restores the complete batch"), F.Profile->Variants.Num(), 1);
 	TestEqual(TEXT("Redo preserves variant identity"), F.Profile->Variants[0].VariantGuid, VariantId);
 	TestEqual(TEXT("Redo preserves entry identity"), F.Profile->Variants[0].Entries[0].EntryGuid, SourceId);
+	const auto& Facades = Result.Report->GetObjectField(TEXT("state"))->GetArrayField(TEXT("variants"))[0]
+		->AsObject()->GetArrayField(TEXT("entries"))[0]->AsObject()->GetArrayField(TEXT("facade"));
+	TestEqual(TEXT("State emits explicit face names"), Facades.Num(), 2);
 	return true;
 }
 
@@ -122,10 +128,14 @@ bool FDeepLevelPCGDSLValidationTest::RunTest(const FString&)
 		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"variant.remove","variant":"$v","weight":1}])JSON"),
 		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","as":"v"}])JSON"),
 		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.update","variant":"$v","entry":"$v","name":"WrongKind"}])JSON"),
+		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","facade":[]}])JSON"),
+		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","facade":["PositiveX","PositiveX"]}])JSON"),
+		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","facade":["positiveX"]}])JSON"),
+		TEXT(R"JSON([{"op":"variant.add","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","facade":"Auto"}])JSON"),
 		TEXT(R"JSON([{"op":"variant.add","weight":0}])JSON")})
 	{
 		const auto Result = DeepLevelPCGAutomation::Execute(F.Request(Operations));
-		TestFalse(TEXT("Typos, ignored fields, alias collisions/kinds and invalid totals are rejected"), Result.bSuccess);
+		TestFalse(FString::Printf(TEXT("Invalid operation batch is rejected: %s"), Operations), Result.bSuccess);
 		TestTrue(TEXT("Rejected request preserves the live profile"), F.Profile->Variants.IsEmpty());
 	}
 	F.Catalog->Buildings[0].bCalibrated = false;

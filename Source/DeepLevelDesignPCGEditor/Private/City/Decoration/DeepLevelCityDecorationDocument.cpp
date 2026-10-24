@@ -694,6 +694,8 @@ bool FDeepLevelCityDecorationDocument::SetEntryFields(const FDeepLevelCityBuildi
 	if (Desired.ActorClass != Baseline.ActorClass) { Patch.ActorClass = Desired.ActorClass; }
 	if (Desired.DecalMaterial != Baseline.DecalMaterial) { Patch.DecalMaterial = Desired.DecalMaterial; }
 	if (Desired.DecalSize != Baseline.DecalSize) { Patch.DecalSize = Desired.DecalSize; }
+	if (Desired.bAutoFacade != Baseline.bAutoFacade) { Patch.bAutoFacade = Desired.bAutoFacade; }
+	if (Desired.Facades != Baseline.Facades) { Patch.Facades = Desired.Facades; }
 	if (!Desired.LocalTransform.Equals(Baseline.LocalTransform)) { Patch.LocalTransform = Desired.LocalTransform; }
 	if (!DeepLevelCityDecorationValidation::ValidateTransform(Patch.LocalTransform, Error)) { return false; }
 	if (Patch.Output != Current->Output)
@@ -705,8 +707,9 @@ bool FDeepLevelCityDecorationDocument::SetEntryFields(const FDeepLevelCityBuildi
 	const bool bOutputChanged = Patch.Output != Current->Output || Patch.Mesh != Current->Mesh || Patch.ActorClass != Current->ActorClass
 		|| Patch.DecalMaterial != Current->DecalMaterial || Patch.DecalSize != Current->DecalSize;
 	const bool bTransformChanged = !Patch.LocalTransform.Equals(Current->LocalTransform);
+	const bool bFacadeChanged = Patch.bAutoFacade != Current->bAutoFacade || Patch.Facades != Current->Facades;
 	if (bTransformChanged && !ValidateLinkedTransform(Patch.LocalTransform, Error)) { return false; }
-	if (!bOutputChanged && !bTransformChanged && Patch.Name == Current->Name) { return true; }
+	if (!bOutputChanged && !bTransformChanged && !bFacadeChanged && Patch.Name == Current->Name) { return true; }
 	const auto Change = bOutputChanged ? EDeepLevelCityDecorationChange::Output
 		: bTransformChanged ? EDeepLevelCityDecorationChange::Transform : EDeepLevelCityDecorationChange::Metadata;
 	Edit(LOCTEXT("EditEntry", "Edit Building Decoration"), Change, [&]

@@ -199,6 +199,16 @@ bool FDeepLevelCityDecorationViewportConstructionTest::RunTest(const FString&)
 	TestNotNull(TEXT("Scene viewport exists before gizmo initialization"), Client->Viewport);
 	TestTrue(TEXT("Empty selection has no transform gizmo"), Client->GetWidgetMode() == UE::Widget::WM_None);
 	TestTrue(TEXT("Realtime preview remains enabled"), Client->IsRealtime());
+	FDeepLevelBuildingPlacementDefinition Definition;
+	Definition.PlacementVolume.Center.Z = 450.0;
+	Definition.PlacementVolume.Extent.Z = 300.0;
+	Preview->SetPlacementGuide(&Definition, false);
+	TestEqual(TEXT("Preview ground follows the calibrated building base even without bounds"), Preview->GetPreviewScene()->GetFloorOffset(), -150.0f);
+	Definition.PlacementVolume.Center.Z = -100.0;
+	Preview->SetPlacementGuide(&Definition, true);
+	TestEqual(TEXT("Preview ground supports a negative actor-local base"), Preview->GetPreviewScene()->GetFloorOffset(), 400.0f);
+	Preview->SetPlacementGuide(nullptr, false);
+	TestEqual(TEXT("Clearing calibration resets preview ground"), Preview->GetPreviewScene()->GetFloorOffset(), 0.0f);
 	return true;
 }
 
@@ -314,6 +324,18 @@ bool FDeepLevelCityDecorationPatchTest::RunTest(const FString&)
 	FTransform Invalid = Fixture.Document.GetEntry()->LocalTransform;
 	Invalid.SetScale3D(FVector::ZeroVector);
 	TestFalse(TEXT("Typed transforms follow the shared nonzero scale contract"), Fixture.Document.SetTransform(Invalid, Error));
+	const auto BeforeFacade = *Fixture.Document.GetEntry();
+	Desired = BeforeFacade;
+	Desired.bAutoFacade = false;
+	Desired.Facades = {EDeepLevelBuildingVolumeFace::PositiveX, EDeepLevelBuildingVolumeFace::NegativeY};
+	TestTrue(TEXT("Facade inspector edit uses the document mutation"), Fixture.Document.SetEntryFields(Desired, BeforeFacade, Error));
+	TestFalse(TEXT("Facade edit disables automatic assignment"), Fixture.Document.GetEntry()->bAutoFacade);
+	TestEqual(TEXT("Facade edit preserves both faces"), Fixture.Document.GetEntry()->Facades.Num(), 2);
+	TestTrue(TEXT("Facade edit publishes metadata"), LastChange == EDeepLevelCityDecorationChange::Metadata);
+	Fixture.Document.Undo();
+	TestTrue(TEXT("Undo restores automatic assignment"), Fixture.Document.GetEntry()->bAutoFacade);
+	Fixture.Document.Redo();
+	TestTrue(TEXT("Redo restores the exact facade assignment"), Fixture.Document.GetEntry()->Facades == Desired.Facades && !Fixture.Document.GetEntry()->bAutoFacade);
 	return true;
 }
 

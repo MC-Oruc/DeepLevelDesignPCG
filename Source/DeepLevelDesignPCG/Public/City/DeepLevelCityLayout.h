@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Building/DeepLevelBuildingFacadeVisibility.h"
 #include "Engine/DataAsset.h"
 #include "GameFramework/Actor.h"
 #include "GameplayTagContainer.h"
@@ -226,6 +227,18 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuilding
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building")
 	FTransform Transform = FTransform::Identity;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building|Facade")
+	FDeepLevelBuildingFacadeGeometry FacadeGeometry;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building|Facade")
+	TArray<FDeepLevelBuildingFacadeSpan> VisibleFacades;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building|Facade")
+	uint8 NeighborFaces = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Building|Facade")
+	uint8 EnclosedFaces = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
 	int32 SourceRevision = 0;

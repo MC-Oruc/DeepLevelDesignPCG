@@ -2,6 +2,7 @@
 #include "City/Decoration/DeepLevelCityBuildingDecorationProfile.h"
 #include "City/Decoration/DeepLevelCityBuildingDecorationResolver.h"
 #include "City/Decoration/DeepLevelCityDecorationValidation.h"
+#include "Building/DeepLevelBuildingFacadeVisibility.h"
 #include "PackedLevelActor/PackedLevelActor.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityBuildingDecorationProfile)
@@ -105,6 +106,14 @@ void FDeepLevelCityBuildingDecorationVariant::RegenerateIdentities()
 
 bool FDeepLevelCityBuildingDecorationEntry::Validate(FText& Error) const
 {
+	if (!bAutoFacade && Facades.IsEmpty()) { Error = LOCTEXT("EmptyExplicitFacades", "Explicit facade assignment requires at least one face."); return false; }
+	TSet<EDeepLevelBuildingVolumeFace> UniqueFaces;
+	for (const EDeepLevelBuildingVolumeFace Face : Facades)
+	{
+		if (static_cast<uint8>(Face) > static_cast<uint8>(EDeepLevelBuildingVolumeFace::NegativeY) || UniqueFaces.Contains(Face))
+		{ Error = LOCTEXT("InvalidExplicitFacades", "Facade assignment contains an invalid or duplicate face."); return false; }
+		UniqueFaces.Add(Face);
+	}
 	return DeepLevelCityDecorationValidation::ValidateTransform(LocalTransform, Error)
 		&& DeepLevelCityDecorationValidation::ValidateOutput(Output, Mesh, ActorClass, DecalMaterial, DecalSize, Error);
 }
@@ -213,6 +222,16 @@ void DeepLevelCityBuildingDecoration::Resolve(
 			const FGuid ArrangementId = FDeepLevelCityStableId::MakePlacementId(Building.StableId, Variant->VariantGuid, 0);
 			for (const FDeepLevelCityBuildingDecorationEntry& Entry : Variant->Entries)
 			{
+				const FVector ActorLocalPoint = Entry.LocalTransform.GetLocation();
+				if (Entry.bAutoFacade)
+				{
+					const EDeepLevelBuildingVolumeFace Face = DeepLevelBuildingFacades::FindNearestFace(Building.FacadeGeometry, ActorLocalPoint);
+					if (!DeepLevelBuildingFacades::IsPointVisible(Building, Face, ActorLocalPoint)) { continue; }
+				}
+				else if (!Entry.Facades.ContainsByPredicate([&Building, &ActorLocalPoint](const EDeepLevelBuildingVolumeFace Face)
+				{
+					return DeepLevelBuildingFacades::IsPointVisible(Building, Face, ActorLocalPoint);
+				})) { continue; }
 				FDeepLevelCityResolvedDecoration& Placement = OutPlacements.Emplace_GetRef();
 				Placement.StableId = FDeepLevelCityStableId::MakePlacementId(ArrangementId, Entry.EntryGuid, 0);
 				Placement.BuildingId = Building.StableId;

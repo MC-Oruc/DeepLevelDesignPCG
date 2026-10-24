@@ -15,10 +15,17 @@ struct FDeepLevelBuildingPreparedLayout
 
 namespace DeepLevelBuildingLayout
 {
-	TArray<FDeepLevelCityBuilding> BuildPublishedBuildings(
+	bool BuildPublishedBuildings(
 		const FGuid& SourceGuid,
 		const FDeepLevelBuildingLinePlan& Plan,
-		TConstArrayView<FTransform> VerifiedTransforms);
+		TConstArrayView<FTransform> VerifiedTransforms,
+		const UDeepLevelBuildingPlacementCatalog& Catalog,
+		TArray<FDeepLevelCityBuilding>& OutBuildings,
+		FText& OutError);
+	bool PopulateFacadeGeometry(
+		TArray<FDeepLevelCityBuilding>& Buildings,
+		const UDeepLevelBuildingPlacementCatalog& Catalog,
+		FText& OutError);
 }
 
 namespace DeepLevelBuildingRoadside

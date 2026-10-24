@@ -77,6 +77,45 @@ namespace
 	{
 		return {MakeShared<FJsonValueNumber>(V.X), MakeShared<FJsonValueNumber>(V.Y), MakeShared<FJsonValueNumber>(V.Z)};
 	}
+	const TCHAR* FaceName(const EDeepLevelBuildingVolumeFace Face)
+	{
+		switch (Face)
+		{
+		case EDeepLevelBuildingVolumeFace::PositiveX: return TEXT("PositiveX");
+		case EDeepLevelBuildingVolumeFace::NegativeX: return TEXT("NegativeX");
+		case EDeepLevelBuildingVolumeFace::PositiveY: return TEXT("PositiveY");
+		case EDeepLevelBuildingVolumeFace::NegativeY: return TEXT("NegativeY");
+		default: return TEXT("Invalid");
+		}
+	}
+	bool ParseFacades(const FObject& Op, FDeepLevelCityBuildingDecorationEntry& Entry, FString& Error)
+	{
+		FString Mode;
+		if (Op->TryGetStringField(TEXT("facade"), Mode))
+		{
+			if (!Mode.Equals(TEXT("auto"), ESearchCase::CaseSensitive)) { Error = TEXT("facade string must be 'auto'."); return false; }
+			Entry.bAutoFacade = true;
+			Entry.Facades.Reset();
+			return true;
+		}
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		if (!Op->TryGetArrayField(TEXT("facade"), Values) || !Values) { Error = TEXT("facade must be 'auto' or an array of exact face names."); return false; }
+		Entry.bAutoFacade = false;
+		Entry.Facades.Reset();
+		static const TMap<FString, EDeepLevelBuildingVolumeFace> Faces = {
+			{TEXT("PositiveX"), EDeepLevelBuildingVolumeFace::PositiveX}, {TEXT("NegativeX"), EDeepLevelBuildingVolumeFace::NegativeX},
+			{TEXT("PositiveY"), EDeepLevelBuildingVolumeFace::PositiveY}, {TEXT("NegativeY"), EDeepLevelBuildingVolumeFace::NegativeY}};
+		for (const TSharedPtr<FJsonValue>& Item : *Values)
+		{
+			FString Name;
+			if (!Item.IsValid() || !Item->TryGetString(Name)) { Error = TEXT("facade array items must be exact face names."); return false; }
+			const auto* Face = Faces.Find(Name);
+			if (!Face || !Name.Equals(FaceName(*Face), ESearchCase::CaseSensitive) || Entry.Facades.Contains(*Face)) { Error = TEXT("facade contains an invalid or duplicate face."); return false; }
+			Entry.Facades.Add(*Face);
+		}
+		if (Entry.Facades.IsEmpty()) { Error = TEXT("explicit facade array must not be empty."); return false; }
+		return true;
+	}
 	void WriteTransform(const FTransform& T, const FObject& Out)
 	{
 		Out->SetArrayField(TEXT("location"), VectorJson(T.GetLocation()));
@@ -117,6 +156,13 @@ namespace
 				Entry->SetStringField(TEXT("output"), E.Output == EDeepLevelCityDecorationOutput::Mesh ? TEXT("mesh") : E.Output == EDeepLevelCityDecorationOutput::Actor ? TEXT("actor") : TEXT("decal"));
 				Entry->SetStringField(TEXT("asset"), E.Output == EDeepLevelCityDecorationOutput::Mesh ? E.Mesh.ToString() : E.Output == EDeepLevelCityDecorationOutput::Actor ? E.ActorClass.ToString() : E.DecalMaterial.ToString());
 				Entry->SetArrayField(TEXT("decalSize"), VectorJson(E.DecalSize));
+				if (E.bAutoFacade) { Entry->SetStringField(TEXT("facade"), TEXT("auto")); }
+				else
+				{
+					TArray<TSharedPtr<FJsonValue>> Faces;
+					for (const auto Face : E.Facades) { Faces.Add(MakeShared<FJsonValueString>(FaceName(Face))); }
+					Entry->SetArrayField(TEXT("facade"), Faces);
+				}
 				WriteTransform(E.LocalTransform, Entry);
 				Entries.Add(MakeShared<FJsonValueObject>(Entry));
 			}
@@ -152,8 +198,8 @@ namespace
 		if (Action == TEXT("variant.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("name"),TEXT("weight")}, Error); }
 		if (Action == TEXT("variant.duplicate")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("name"),TEXT("weight")}, Error); }
 		if (Action == TEXT("variant.remove")) { return Fields(Op, {TEXT("op"),TEXT("variant")}, Error); }
-		if (Action == TEXT("entry.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize")}, Error); }
-		if (Action == TEXT("entry.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize")}, Error); }
+		if (Action == TEXT("entry.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade")}, Error); }
+		if (Action == TEXT("entry.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade")}, Error); }
 		if (Action == TEXT("entry.duplicate")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("entry")}, Error); }
 		if (Action == TEXT("entry.remove") || Action == TEXT("link.remove")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry")}, Error); }
 		if (Action == TEXT("entry.move")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("direction")}, Error); }
@@ -264,6 +310,8 @@ namespace
 				}
 				if (!Name.IsEmpty()) { Desired.Name = FName(*Name); }
 				if (!PatchTransform(Op, Desired.LocalTransform, Error) || !Vector(Op, TEXT("decalSize"), Desired.DecalSize, Error)) { return false; }
+				const bool bHasFacade = Op->HasField(TEXT("facade"));
+				if (bHasFacade && !ParseFacades(Op, Desired, Error)) { return false; }
 				if (!Desired.Validate(Failure)) { Error = Failure.ToString(); return false; }
 				if (Action == TEXT("entry.add")) { Document.AddEntries(MakeArrayView(&Desired, 1)); }
 				else if (!Document.SetEntryFields(Desired, Baseline, Failure)) { Error = Failure.ToString(); return false; }
@@ -321,7 +369,7 @@ namespace
 
 FString DeepLevelCityDecorationDSL::Describe()
 {
-	return TEXT(R"JSON({"scope":"City Decoration Set and its linked building profiles. Profile creation is explicit and limited to the selected catalog building; no level generation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links. If the building has no profile, provide profile as an exact long package path under the set's Buildings folder. Existing profile package is reusable only when its class is null and variants are empty. dryRun creates no persistent assets.","rootFields":["version","domain","set","building?","profile?","variant?","operations","capture?","save?","dryRun?","includeState?","camera?","captureSize?"],"operations":[{"op":"variant.add","fields":["name?","weight?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","profile":"/Game/Example/Buildings/DA_Building_Decoration","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"as":"lamp"}],"variant":"$v","save":true}})JSON");
+	return TEXT(R"JSON({"scope":"City Decoration Set and its linked building profiles. Profile creation is explicit and limited to the selected catalog building; no level generation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links. If the building has no profile, provide profile as an exact long package path under the set's Buildings folder. Existing profile package is reusable only when its class is null and variants are empty. dryRun creates no persistent assets.","rootFields":["version","domain","set","building?","profile?","variant?","operations","capture?","save?","dryRun?","includeState?","camera?","captureSize?"],"operations":[{"op":"variant.add","fields":["name?","weight?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","facade?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?","facade?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"facade":"'auto' chooses the nearest geometric face. An explicit nonempty array such as ['PositiveX','NegativeY'] uses OR visibility. Forbidden faces are filtered by building visibility.","vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","profile":"/Game/Example/Buildings/DA_Building_Decoration","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"facade":"auto","as":"lamp"}],"variant":"$v","save":true}})JSON");
 }
 
 void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAutomationResult& Out)

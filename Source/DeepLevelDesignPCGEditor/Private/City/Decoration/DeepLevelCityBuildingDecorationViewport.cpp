@@ -278,14 +278,36 @@ void SDeepLevelCityBuildingDecorationViewport::Construct(const FArguments& Args)
 	Client->SetViewMode(VMI_Lit);
 	Client->SetWidgetMode(UE::Widget::WM_Translate);
 	Client->SetInitialViewTransform(LVT_Perspective, FVector(-2500, -3500, 2200), FRotator(-20, 45, 0), DEFAULT_ORTHOZOOM);
+	EditorPreExitHandle = FEditorDelegates::OnEditorPreExit.AddRaw(this, &SDeepLevelCityBuildingDecorationViewport::ShutdownPreview);
 }
 
 SDeepLevelCityBuildingDecorationViewport::~SDeepLevelCityBuildingDecorationViewport()
 {
-	GetSceneViewport()->SetViewportClient(TStrongPtrVariant<FViewportClient>(nullptr));
+	ShutdownPreview();
+}
+
+void SDeepLevelCityBuildingDecorationViewport::ShutdownPreview()
+{
+	if (bPreviewShutdown) { return; }
+	bPreviewShutdown = true;
+	if (EditorPreExitHandle.IsValid())
+	{
+		FEditorDelegates::OnEditorPreExit.Remove(EditorPreExitHandle);
+		EditorPreExitHandle.Reset();
+	}
+	if (Client.IsValid()) { Client->SetRealtime(false); }
+	if (const TSharedPtr<FSceneViewport> PreviewViewport = GetSceneViewport())
+	{
+		PreviewViewport->SetViewportClient(TStrongPtrVariant<FViewportClient>(nullptr));
+	}
 	ClearDecorations();
-	if (BuildingActor.IsValid()) { PreviewScene->GetWorld()->DestroyActor(BuildingActor.Get()); }
-	Client.Reset(); PreviewScene.Reset();
+	if (BuildingActor.IsValid())
+	{
+		PreviewScene->GetWorld()->DestroyActor(BuildingActor.Get());
+		BuildingActor.Reset();
+	}
+	Client.Reset();
+	PreviewScene.Reset();
 }
 
 TSharedRef<FEditorViewportClient> SDeepLevelCityBuildingDecorationViewport::MakeEditorViewportClient()
@@ -474,6 +496,8 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 void SDeepLevelCityBuildingDecorationViewport::SetPlacementGuide(const FDeepLevelBuildingPlacementDefinition* Definition, bool bShowBounds)
 {
 	PlacementGuide = Definition ? TOptional<FDeepLevelBuildingPlacementVolume>(Definition->PlacementVolume) : TOptional<FDeepLevelBuildingPlacementVolume>();
+	const double GroundHeight = Definition ? Definition->PlacementVolume.Center.Z - Definition->PlacementVolume.Extent.Z : 0.0;
+	PreviewScene->SetFloorOffset(static_cast<float>(-GroundHeight));
 	bDrawPlacementBounds = bShowBounds;
 	Client->Invalidate();
 }

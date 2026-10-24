@@ -183,7 +183,20 @@ bool ADeepLevelPCGRoadsideBuildingActor::BuildCityLayoutFragment(
 	OutFragment = PreparedLayout ? PreparedLayout->Fragment : FDeepLevelCityLayoutFragment{};
 	OutFragment.SourceGuid = LayoutSourceGuid;
 	OutFragment.SourceRevision = LayoutRevision;
-	if (bOutputCurrent) { OutFragment.Buildings = GeneratedBuildings; }
+	if (bOutputCurrent)
+	{
+		OutFragment.Buildings = GeneratedBuildings;
+		if (!OutFragment.Buildings.IsEmpty())
+		{
+			const UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+			if (!LoadedCatalog)
+			{
+				OutError = LOCTEXT("MissingPublishedCatalog", "Roadside Building publication requires its calibrated catalog.");
+				return false;
+			}
+			if (!DeepLevelBuildingLayout::PopulateFacadeGeometry(OutFragment.Buildings, *LoadedCatalog, OutError)) { return false; }
+		}
+	}
 	return true;
 }
 
@@ -705,8 +718,15 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCompleted(UPCGCompo
 		return;
 	}
 	BuildingPlacementCount = Actors.Num();
-	GeneratedBuildings = DeepLevelBuildingLayout::BuildPublishedBuildings(
-		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms);
+	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog || !DeepLevelBuildingLayout::BuildPublishedBuildings(
+		LayoutSourceGuid, GeneratingLayout->Plan, VerifiedTransforms, *LoadedCatalog, GeneratedBuildings, LastGenerationError))
+	{
+		if (!LoadedCatalog) { LastGenerationError = LOCTEXT("MissingPublishedCatalog", "Roadside Building publication requires its calibrated catalog."); }
+		GeneratingLayout.Reset();
+		ReportRoadsideFailure(*this, LastGenerationError);
+		return;
+	}
 	bOutputCurrent = true;
 	LastGenerationError = FText::GetEmpty();
 	GeneratingLayout.Reset();
