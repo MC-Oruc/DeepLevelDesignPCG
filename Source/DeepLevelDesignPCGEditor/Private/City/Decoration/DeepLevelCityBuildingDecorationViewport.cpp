@@ -305,6 +305,20 @@ AActor* SDeepLevelCityBuildingDecorationViewport::Spawn(UClass* Class, const FTr
 	return Actor;
 }
 
+void SDeepLevelCityBuildingDecorationViewport::ApplyActorTransform(AActor* Actor, const FTransform& Transform)
+{
+	if (!Actor) { return; }
+	const bool bWasMirrored = Actor->GetActorTransform().GetDeterminant() < 0.0;
+	Actor->SetActorTransform(Transform);
+	if (bWasMirrored != (Actor->GetActorTransform().GetDeterminant() < 0.0))
+	{
+		// Cached mesh draw commands retain their winding when a live transform changes handedness.
+		TInlineComponentArray<UPrimitiveComponent*> Components;
+		Actor->GetComponents(Components, true);
+		for (auto* Component : Components) { Component->MarkRenderStateDirty(); }
+	}
+}
+
 void SDeepLevelCityBuildingDecorationViewport::ClearDecorations()
 {
 	ClearSymmetryPreview();
@@ -419,7 +433,7 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 			{
 				if (!Old->LocalTransform.Equals(Entry.LocalTransform))
 				{
-					Actor->SetActorTransform(Entry.LocalTransform);
+					ApplyActorTransform(Actor, Entry.LocalTransform);
 					DecorationSurfaces.FindChecked(Entry.EntryGuid).UpdateActorTransform(Entry.LocalTransform);
 				}
 				if (auto* Decal = Cast<ADecalActor>(Actor); Decal && !Decal->GetDecal()->DecalSize.Equals(Entry.DecalSize))
@@ -474,7 +488,7 @@ void SDeepLevelCityBuildingDecorationViewport::UpdateEntry(const FGuid& Id, cons
 	const auto* Existing = PreviewEntries.Find(Id);
 	if (Existing && Existing->LocalTransform.Equals(Transform)) { return; }
 	const auto* Actor = DecorationActors.Find(Id);
-	if (Actor && Actor->IsValid() && !Actor->Get()->GetActorTransform().Equals(Transform)) { Actor->Get()->SetActorTransform(Transform); }
+	if (Actor && Actor->IsValid() && !Actor->Get()->GetActorTransform().Equals(Transform)) { ApplyActorTransform(Actor->Get(), Transform); }
 	if (auto* Entry = PreviewEntries.Find(Id)) { Entry->LocalTransform = Transform; }
 	if (auto* Geometry = DecorationSurfaces.Find(Id)) { Geometry->UpdateActorTransform(Transform); }
 	Client->Invalidate();

@@ -12,6 +12,7 @@
 #include "Components/DecalComponent.h"
 #include "Engine/DecalActor.h"
 #include "Engine/World.h"
+#include "UnrealClient.h"
 #include "Slate/SceneViewport.h"
 #include "EngineUtils.h"
 #include "SceneView.h"
@@ -342,6 +343,65 @@ bool FDeepLevelCityDecorationDragLifecycleTest::RunTest(const FString&)
 	TestEqual(TEXT("Closing an active drag cannot notify or rebuild the preview"), Notifications, BeforeClose);
 	TestFalse(TEXT("Closed document rejects further edits"), Fixture.Document.CanEdit());
 	TestFalse(TEXT("Closed document cannot change set assignments"), Fixture.Document.RemoveAssignment(Fixture.Set.Get(), 0, Fixture.Profile.Get()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityDecorationMirroredRenderingTest,
+	"DeepLevelDesignPCG.Editor.City.DecorationEditor.MirroredRendering",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityDecorationMirroredRenderingTest::RunTest(const FString&)
+{
+	FDecorationFixture Fixture;
+	auto& Entry = Fixture.Profile->Variants[0].Entries[0];
+	Entry.LocalTransform = FTransform(FRotator::ZeroRotator, FVector(2000, 0, 200), FVector(1.5, 1, 1.2));
+	const auto Preview = SNew(SDeepLevelCityBuildingDecorationViewport);
+	Preview->SetRenderDirectlyToWindow(false);
+	Preview->Synchronize(Fixture.Profile->BuildingClass, Fixture.Profile.Get(), Fixture.Document.GetVariantId());
+	const auto Viewport = Preview->GetSceneViewport();
+	Viewport->SetInitialSize(FIntPoint(256, 256));
+	const auto Client = Preview->GetClient();
+	Client->SetRealtime(false);
+	Client->SetViewMode(VMI_Unlit);
+	Client->SetViewLocation(FVector(2000, -350, 200));
+	Client->SetViewRotation(FRotator(0, 90, 0));
+	Client->ViewFOV = 45;
+	Client->EngineShowFlags.SetAntiAliasing(false);
+	Client->EngineShowFlags.SetScreenPercentage(false);
+	const auto Capture = [&]()
+	{
+		Viewport->Draw();
+		FlushRenderingCommands();
+		TArray<FColor> Pixels;
+		GetViewportScreenShot(Viewport.Get(), Pixels);
+		return Pixels;
+	};
+	const auto Positive = Capture();
+	if (!TestEqual(TEXT("Rendered reference has a complete framebuffer"), Positive.Num(), 256 * 256)) { return false; }
+	FTransform Mirrored = Entry.LocalTransform;
+	Mirrored.SetScale3D(FVector(1.5, -1, 1.2));
+	Entry.LocalTransform = Mirrored;
+	Preview->Synchronize(Fixture.Profile->BuildingClass, Fixture.Profile.Get(), Fixture.Document.GetVariantId());
+	const auto ViaInspector = Capture();
+	const auto SameImage = [](const TArray<FColor>& A, const TArray<FColor>& B)
+	{
+		if (A.Num() != B.Num()) { return false; }
+		int32 Different = 0;
+		for (int32 I = 0; I < A.Num(); ++I)
+		{
+			if (FMath::Abs(int32(A[I].R) - int32(B[I].R)) > 5
+				|| FMath::Abs(int32(A[I].G) - int32(B[I].G)) > 5
+				|| FMath::Abs(int32(A[I].B) - int32(B[I].B)) > 5) { ++Different; }
+		}
+		return Different < A.Num() / 100;
+	};
+	TestTrue(TEXT("Mirroring the symmetric cube keeps its outward surfaces visible"), SameImage(Positive, ViaInspector));
+	Mirrored.SetScale3D(FVector(1.5, 1, 1.2));
+	Preview->UpdateEntry(Entry.EntryGuid, Mirrored);
+	TestTrue(TEXT("Interactive unmirror restores the original rendered surfaces"), SameImage(Positive, Capture()));
+	Mirrored.SetScale3D(FVector(1.5, -1, 1.2));
+	Preview->UpdateEntry(Entry.EntryGuid, Mirrored);
+	TestTrue(TEXT("Interactive remirror preserves outward surfaces"), SameImage(Positive, Capture()));
 	return true;
 }
 

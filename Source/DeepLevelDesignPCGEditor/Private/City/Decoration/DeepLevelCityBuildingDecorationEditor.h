@@ -317,6 +317,7 @@ protected:
 	virtual void OnFocusViewportToSelection() override;
 private:
 	AActor* Spawn(UClass* Class, const FTransform& Transform);
+	static void ApplyActorTransform(AActor* Actor, const FTransform& Transform);
 	void ClearDecorations();
 	AActor* SpawnEntry(const FDeepLevelCityBuildingDecorationEntry& Entry);
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;

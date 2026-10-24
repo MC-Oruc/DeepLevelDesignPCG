@@ -6,7 +6,7 @@ Use a Building Placement Catalog to calibrate buildings, then assign their decor
 
 The building calibration and decoration viewports use the same exposure colors and labels: required is green, preferred blue, neutral gray and forbidden red. These guides describe the calibrated placement volume.
 
-Exposure rules constrain building placement; profiles do not filter individual decorations against neighboring buildings. Use a required street-facing facade for essential signage. Decal poses describe the projector directly; size is its local X/Y/Z half-extents, with X controlling projection depth. The preview applies the same pose as generated output and refreshes the projector when its dimensions change.
+Exposure rules constrain building placement; profiles do not filter individual decorations against neighboring buildings. Fit signage to the existing street-facing frontage without changing building exposure or calibration. Decal poses describe the projector directly; size is its local X/Y/Z half-extents, with X controlling projection depth. The preview applies the same pose as generated output and refreshes the projector when its dimensions change.
 
 Selecting a different building frames its bounds from the highest-priority exposure direction. Equally ranked adjacent faces produce a diagonal view showing both. Changing variants or refreshing the same building preserves the camera, so placements can be compared without losing the viewing angle.
 
@@ -21,6 +21,8 @@ Editor-specific shortcuts appear at the upper left of the viewport. Selection, c
 ## Linked symmetry
 
 Select decorations and open the viewport context menu. Start mirror placement for the selection, or link two existing selected entries while retaining their placements. Existing pairs expose a selectable cyan center between their members. Move this center with the gizmo to adjust the linked arrangement; synchronization settings control location, rotation and scale independently. Offsets allow different assets and asymmetric authored details without discarding the link.
+
+Mirror Geometry reflects the complete mesh using signed scale. Live decoration and ghost previews refresh their render state when transform handedness changes, preserving outward-facing surfaces when mirroring is toggled or undone.
 
 New mirror placement shows ghost copies, the proposed center and extended axis guides before committing. Move the cursor to position the center:
 

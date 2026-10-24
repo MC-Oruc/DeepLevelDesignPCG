@@ -259,7 +259,7 @@ bool SDeepLevelCityBuildingDecorationViewport::SetSymmetryPreview(TConstArrayVie
 			Actor->GetComponents(Decals, true);
 			for (auto* Decal : Decals) { Decal->SetVisibility(false); }
 		}
-		Actor->SetActorTransform(Copy.LocalTransform);
+		ApplyActorTransform(Actor, Copy.LocalTransform);
 	}
 	SymmetryPreviewEntries.Reset();
 	SymmetryPreviewEntries.Append(Copies.GetData(), Copies.Num());
