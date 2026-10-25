@@ -66,17 +66,19 @@ void FDeepLevelCityBuildingDecorationViewportClient::Draw(const FSceneView* View
 	for (const auto& Pair : Pinned->GetSymmetryPairs())
 	{
 		const auto& Selected = Pinned->GetSelectedEntryIds();
-		if (!Selected.Contains(Pair.First) && !Selected.Contains(Pair.Second)) { continue; }
+		const bool bSelected = Selected.Contains(Pair.First) || Selected.Contains(Pair.Second);
 		const auto* First = Pinned->GetDecoration(Pair.First);
 		const auto* Second = Pinned->GetDecoration(Pair.Second);
 		if (!First || !Second) { continue; }
 		const FVector Center = Pinned->GetSymmetryCenter(Pair);
-		const FLinearColor Color = Pinned->IsSymmetryPivotSelected() ? FLinearColor::Yellow : FLinearColor(0.2f, 0.8f, 1.0f);
+		const FLinearColor Color = bSelected
+			? (Pinned->IsSymmetryPivotSelected() ? FLinearColor::Yellow : FLinearColor(0.2f, 0.8f, 1.0f))
+			: FLinearColor(0.07f, 0.28f, 0.35f, 0.35f);
 		PDI->DrawLine(First->LocalTransform.GetLocation(), Center, Color, SDPG_Foreground);
 		PDI->DrawLine(Second->LocalTransform.GetLocation(), Center, Color, SDPG_Foreground);
 		PDI->SetHitProxy(new HDeepLevelCityDecorationPivot(Pair.First));
-		PDI->DrawPoint(Center, Color, 20, SDPG_Foreground);
-		DrawWireDiamond(PDI, FTranslationMatrix(Center), 14, Color, SDPG_Foreground);
+		PDI->DrawPoint(Center, Color, bSelected ? 20 : 12, SDPG_Foreground);
+		DrawWireDiamond(PDI, FTranslationMatrix(Center), bSelected ? 14 : 8, Color, SDPG_Foreground);
 		PDI->SetHitProxy(nullptr);
 	}
 }

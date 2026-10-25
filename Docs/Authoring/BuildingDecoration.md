@@ -20,7 +20,7 @@ Editor-specific shortcuts appear at the upper left of the viewport. Selection, c
 
 ## Linked symmetry
 
-Select decorations and open the viewport context menu. Start mirror placement for the selection, or link two existing selected entries while retaining their placements. Existing pairs expose a selectable cyan center between their members. Move this center with the gizmo to adjust the linked arrangement; synchronization settings control location, rotation and scale independently. Offsets allow different assets and asymmetric authored details without discarding the link.
+Select decorations and open the viewport context menu. Start mirror placement for the selection, or link two existing selected entries while retaining their placements. Existing pairs always show subdued cyan links and a small selectable center, including when neither member is selected. Selecting a member brightens its link and enlarges the center; selecting the center highlights it yellow. This keeps other pairs discoverable while building a multi-selection with Ctrl-click or Shift-click on decorations. Move the center with the gizmo to adjust the linked arrangement; synchronization settings control location, rotation and scale independently. Offsets allow different assets and asymmetric authored details without discarding the link.
 
 Mirror Geometry reflects the complete mesh using signed scale. Live decoration and ghost previews refresh their render state when transform handedness changes, preserving outward-facing surfaces when mirroring is toggled or undone.
 
