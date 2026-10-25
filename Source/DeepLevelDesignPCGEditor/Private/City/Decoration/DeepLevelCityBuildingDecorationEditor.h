@@ -130,6 +130,7 @@ public:
 	virtual FText GetBaseToolkitName() const override;
 	virtual FText GetToolkitName() const override;
 	virtual FText GetToolkitToolTipText() const override;
+	virtual bool IncludeAssetInRestoreOpenAssetsPrompt(UObject* Asset) const override;
 	virtual FString GetWorldCentricTabPrefix() const override { return TEXT("Building Decoration"); }
 	virtual FLinearColor GetWorldCentricTabColorScale() const override { return FLinearColor(0.6f, 0.25f, 0.8f); }
 	virtual void RegisterTabSpawners(const TSharedRef<FTabManager>& Manager) override;

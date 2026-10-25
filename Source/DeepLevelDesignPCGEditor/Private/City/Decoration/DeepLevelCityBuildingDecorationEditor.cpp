@@ -81,6 +81,12 @@ FText FDeepLevelCityBuildingDecorationEditor::GetToolkitName() const
 	return GetLabelForObject(GetEditingObjects()[0]);
 }
 
+bool FDeepLevelCityBuildingDecorationEditor::IncludeAssetInRestoreOpenAssetsPrompt(UObject* Asset) const
+{
+	const auto& Objects = GetEditingObjects();
+	return Asset && !Objects.IsEmpty() && Asset == Objects[0];
+}
+
 FText FDeepLevelCityBuildingDecorationEditor::GetToolkitToolTipText() const
 {
 	TArray<FText> AssetToolTips;

@@ -40,6 +40,8 @@ Axis placement follows the viewport's local/world coordinate mode and Unreal's e
 
 Save the edited profiles and set explicitly. Previewing a profile does not regenerate the city. Use the owning City Layout's decoration regeneration action, then save the level to update baked output. Native automation edits the same authoring document; see [MCP](../Automation/MCP.md).
 
+Restart restoration records only the set originally opened as the workspace. Profiles and other sets visited inside that workspace remain in its save scope without reopening as separate asset editors.
+
 Closing the workspace or exiting Unreal stops preview rendering and releases its actors before the preview world is torn down.
 
 The preview ground matches the calibrated placement-volume base used by Building Network.

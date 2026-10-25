@@ -637,6 +637,9 @@ bool FDeepLevelCityDecorationSetSelectionTest::RunTest(const FString&)
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
 	TestTrue(TEXT("The workspace opens from an explicit City Set"), Toolkit->Document->GetSet() == Fixture.Set.Get());
 	TestEqual(TEXT("Set entry registers its editable profile for saving"), Toolkit->GetEditingObjects().Num(), 2);
+	TestTrue(TEXT("Only the opened set restores the workspace on restart"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Set.Get()));
+	TestFalse(TEXT("Profiles in the save scope do not restore as separate editors"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Profile.Get()));
+	TestFalse(TEXT("Null assets are not restored"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(nullptr));
 	const FString Title = Fixture.Set->GetName();
 	TestEqual(TEXT("Workspace title names the opened set"), Toolkit->GetToolkitName().ToString(), Title);
 	TestTrue(TEXT("Workspace tooltip includes the opened set"), Toolkit->GetToolkitToolTipText().ToString().Contains(Title));
@@ -655,11 +658,14 @@ bool FDeepLevelCityDecorationSetSelectionTest::RunTest(const FString&)
 	Toolkit->ChooseSet(FAssetData(Other.Set.Get()));
 	TestTrue(TEXT("Changing set resolves its own profile"), Toolkit->Document->GetProfile() == Other.Profile.Get());
 	TestEqual(TEXT("Previously edited assets remain in the save scope"), Toolkit->GetEditingObjects().Num(), 4);
+	TestFalse(TEXT("A set visited through the picker does not restore a second workspace"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Other.Set.Get()));
+	TestFalse(TEXT("A visited profile does not restore a separate editor"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Other.Profile.Get()));
 	TestEqual(TEXT("Context changes preserve the workspace identity"), Toolkit->GetToolkitName().ToString(), Title);
 	TestTrue(TEXT("Tooltip includes the new context"), Toolkit->GetToolkitToolTipText().ToString().Contains(Other.Set->GetName()));
 	Toolkit->ChooseSet(FAssetData());
 	TestNull(TEXT("Clearing the picker removes set context"), Toolkit->Document->GetSet());
 	TestEqual(TEXT("Clearing the picker preserves registered edited assets"), Toolkit->GetEditingObjects().Num(), 4);
+	TestTrue(TEXT("Clearing context retains the original workspace restore identity"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Set.Get()));
 	TestEqual(TEXT("Title remains valid with a cleared picker"), Toolkit->GetToolkitName().ToString(), Title);
 	TestTrue(TEXT("Tooltip remains valid with a cleared picker"), Toolkit->GetToolkitToolTipText().ToString().Contains(Title));
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
