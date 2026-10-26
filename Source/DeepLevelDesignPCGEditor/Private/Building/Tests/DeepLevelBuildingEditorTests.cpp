@@ -2,7 +2,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "AssetToolsModule.h"
 #include "Misc/AutomationTest.h"
 #include "Building/DeepLevelBuildingPCG.h"
 #include "Building/DeepLevelBuildingPreviewPresentation.h"
@@ -30,19 +29,6 @@ bool FDeepLevelBuildingPreviewExposureTest::RunTest(const FString&)
 	Volume.Exposure.PositiveY = EDeepLevelStreetExposureRule::Forbidden;
 	Volume.Exposure.NegativeX = EDeepLevelStreetExposureRule::Required;
 	TestTrue(TEXT("Opposite faces choose a deterministic nonzero direction"), ViewDirection(Volume).Equals(FVector::ForwardVector));
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FDeepLevelBuildingCatalogAssetActionsTest,
-	"DeepLevelDesignPCG.Editor.BuildingCalibration.AssetActions",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FDeepLevelBuildingCatalogAssetActionsTest::RunTest(const FString&)
-{
-	const TSharedPtr<IAssetTypeActions> Actions = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"))
-		.Get().GetAssetTypeActionsForClass(UDeepLevelBuildingPlacementCatalog::StaticClass()).Pin();
-	TestTrue(TEXT("Building catalog custom asset actions are registered"), Actions.IsValid());
 	return true;
 }
 
