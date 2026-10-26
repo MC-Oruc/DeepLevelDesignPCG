@@ -18,6 +18,8 @@ Duplicate, copy, paste and delete operate on the selection. Links belonging to c
 
 Editor-specific shortcuts appear at the upper left of the viewport. Selection, coordinate space, grid step and symmetry mode appear at the upper right. The help changes with the active operation.
 
+Drag edits validate the complete candidate arrangement before committing. Symmetry validation indexes entry identities once per candidate so each link resolves its endpoints without rescanning the arrangement.
+
 ## Linked symmetry
 
 Select decorations and open the viewport context menu. Start mirror placement for the selection, or link two existing selected entries while retaining their placements. Existing pairs always show subdued cyan links and a small selectable center, including when neither member is selected. Selecting a member brightens its link and enlarges the center; selecting the center highlights it yellow. This keeps other pairs discoverable while building a multi-selection with Ctrl-click or Shift-click on decorations. Move the center with the gizmo to adjust the linked arrangement; synchronization settings control location, rotation and scale independently. Offsets allow different assets and asymmetric authored details without discarding the link.

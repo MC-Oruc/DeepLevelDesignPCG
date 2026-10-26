@@ -735,7 +735,7 @@ void FDeepLevelCityDecorationDocument::ApplyDragTransform(const FTransform& Tran
 {
 	if (!GetEntry() || !CanEdit()) { return; }
 	FText Error;
-	if (!DeepLevelCityDecorationValidation::ValidateTransform(Transform, Error) || !ValidateLinkedTransform(Transform, Error)) { return; }
+	if (!DeepLevelCityDecorationValidation::ValidateTransform(Transform, Error)) { return; }
 	auto Candidate = *GetVariant();
 	auto* Changed = Candidate.Entries.FindByPredicate([&](const auto& Item) { return Item.EntryGuid == EntryId; });
 	Changed->LocalTransform = Transform;

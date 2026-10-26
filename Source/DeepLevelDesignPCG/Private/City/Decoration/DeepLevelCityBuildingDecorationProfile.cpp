@@ -72,11 +72,15 @@ void FDeepLevelCityDecorationSymmetryPair::CaptureOffsets(const FTransform& Sour
 
 bool FDeepLevelCityBuildingDecorationVariant::HasValidSymmetry() const
 {
+	if (SymmetryPairs.IsEmpty()) { return true; }
+	TMap<FGuid, const FDeepLevelCityBuildingDecorationEntry*> EntriesById;
+	EntriesById.Reserve(Entries.Num());
+	for (const auto& Entry : Entries) { EntriesById.Add(Entry.EntryGuid, &Entry); }
 	TSet<FGuid> Linked;
 	for (const auto& Pair : SymmetryPairs)
 	{
-		const auto* First = Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Pair.First; });
-		const auto* Second = Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Pair.Second; });
+		const auto* First = EntriesById.FindRef(Pair.First);
+		const auto* Second = EntriesById.FindRef(Pair.Second);
 		if (!First || !Second || Pair.First == Pair.Second || Linked.Contains(Pair.First) || Linked.Contains(Pair.Second)
 			|| !Pair.HasValidSettings()) { return false; }
 		if (!Pair.SynchronizeTransform(First->LocalTransform, Second->LocalTransform, true).Equals(Second->LocalTransform, 0.001)) { return false; }
