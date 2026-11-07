@@ -2,6 +2,7 @@
 #include "Building/DeepLevelBuildingFacadeVisibility.h"
 #include "City/DeepLevelCityLayout.h"
 #include "Curve/PolygonIntersectionUtils.h"
+#include "Curve/PolygonOffsetUtils.h"
 
 #define LOCTEXT_NAMESPACE "DeepLevelBuildingFacades"
 
@@ -92,8 +93,14 @@ bool DeepLevelBuildingFacades::IsPointVisible(const FDeepLevelCityBuilding& Buil
 }
 
 bool DeepLevelBuildingFacades::Resolve(TArray<FDeepLevelCityBuilding>& Buildings,
-	const FDeepLevelCityGrid& Grid, const TMap<FIntPoint, FDeepLevelCityCellState>& Cells, FText& Error)
+	const FDeepLevelCityGrid& Grid, const TMap<FIntPoint, FDeepLevelCityCellState>& Cells, FText& Error,
+	const double SeamTolerance)
 {
+	if (!FMath::IsFinite(SeamTolerance) || SeamTolerance < 0)
+	{
+		Error = LOCTEXT("InvalidSeamTolerance", "Facade seam tolerance must be finite and non-negative.");
+		return false;
+	}
 	if (Buildings.IsEmpty()) { Error = FText::GetEmpty(); return true; }
 	TArray<const FDeepLevelCityBuilding*> Ordered;
 	for (auto& Building : Buildings)
@@ -138,8 +145,12 @@ bool DeepLevelBuildingFacades::Resolve(TArray<FDeepLevelCityBuilding>& Buildings
 	}
 	Bounds = Bounds.ExpandBy(FMath::Max(Grid.TileSize, 100.0));
 	TArray<FVector2d> FrameVertices{Bounds.Min, FVector2d(Bounds.Max.X, Bounds.Min.Y), Bounds.Max, FVector2d(Bounds.Min.X, Bounds.Max.Y)};
-	TArray<FGeneralPolygon2d> Domain{FGeneralPolygon2d(FPolygon2d(FrameVertices))}, Solid, Free;
-	if (!PolygonsUnion(Footprints, Solid, false) || !PolygonsDifference(Domain, Solid, Free))
+	TArray<FGeneralPolygon2d> Domain{FGeneralPolygon2d(FPolygon2d(FrameVertices))}, Solid, TopologySolid, Free;
+	// Close authoring seams for connectivity without expanding the visible building footprint.
+	if (!PolygonsUnion(Footprints, Solid, false)
+		|| !PolygonsOffsets(SeamTolerance * .5, -SeamTolerance * .5, Solid, TopologySolid,
+			false, 2.0, EPolygonOffsetJoinType::Miter)
+		|| !PolygonsDifference(Domain, TopologySolid, Free))
 	{
 		Error = LOCTEXT("TopologyFailed", "Building facade topology could not be computed from the published footprints.");
 		return false;

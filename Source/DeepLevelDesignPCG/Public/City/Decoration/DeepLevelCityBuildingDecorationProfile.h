@@ -8,16 +8,62 @@
 #include "Engine/DataAsset.h"
 #include "DeepLevelCityBuildingDecorationProfile.generated.h"
 
+USTRUCT()
+struct DEEPLEVELDESIGNPCG_API FDeepLevelCityWindowAppearance
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, Category="Appearance")
+    FName Name;
+    UPROPERTY(EditAnywhere, Category="Appearance")
+    TSoftObjectPtr<UMaterialInterface> Material;
+    UPROPERTY(EditAnywhere, Category="Appearance", meta=(HideAlphaChannel))
+    FLinearColor Color = FLinearColor::White;
+    UPROPERTY(EditAnywhere, Category="Appearance", meta=(ClampMin="0"))
+    float Brightness = 1.6f;
+    UPROPERTY(EditAnywhere, Category="Appearance", meta=(ClampMin="0"))
+    float Weight = 1.f;
+};
+
 USTRUCT(BlueprintType)
 struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuildingDecorationEntry
 {
 	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Output")
+	FDeepLevelCityDecorationRendering Rendering;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
 	FGuid EntryGuid;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Decoration")
 	FName Name;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Decoration", meta = (DisplayName = "Enabled"))
+    bool bEnabled = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Window Lighting", meta = (EditCondition = "Output == EDeepLevelCityDecorationOutput::Mesh", EditConditionHides, DisplayName = "Window Lighting"))
+    bool bWindowLight = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Window Lighting", meta = (EditCondition = "bWindowLight", EditConditionHides, HideAlphaChannel))
+    FLinearColor WindowColor = FLinearColor(1.f, .56f, .26f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Window Lighting", meta = (EditCondition = "bWindowLight", EditConditionHides, ClampMin = "0", UIMax = "10", DisplayName = "Brightness"))
+    float WindowIntensity = 1.6f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Window Lighting", meta=(EditCondition="bWindowLight", EditConditionHides))
+    TSoftObjectPtr<UMaterialInterface> WindowMaterialOverride;
+
+#if WITH_EDITORONLY_DATA
+    UPROPERTY()
+    FGuid WindowDefinitionGuid;
+    UPROPERTY()
+    FGuid WindowRoomGuid;
+    UPROPERTY()
+    FName WindowSource;
+    UPROPERTY()
+    bool bWindowAutoCandidate = false;
+#endif
+
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Output")
 	EDeepLevelCityDecorationOutput Output = EDeepLevelCityDecorationOutput::Mesh;
@@ -44,6 +90,37 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuildingDecorationEntry
 	TArray<EDeepLevelBuildingVolumeFace> Facades;
 
 	bool Validate(FText& Error) const;
+};
+
+USTRUCT(BlueprintType)
+struct DEEPLEVELDESIGNPCG_API FDeepLevelCityWindowDefinition
+{
+    GENERATED_BODY()
+    UPROPERTY(VisibleAnywhere, Category="Identity") FGuid WindowGuid;
+    UPROPERTY(EditAnywhere, Category="Window") FName Name;
+    UPROPERTY(EditAnywhere, Category="Window") FGuid RoomGuid;
+    UPROPERTY(EditAnywhere, Category="Geometry") TSoftObjectPtr<UStaticMesh> Mesh;
+    UPROPERTY(EditAnywhere, Category="Geometry") FTransform LocalTransform = FTransform::Identity;
+    UPROPERTY(EditAnywhere, Category="Rendering") FDeepLevelCityDecorationRendering Rendering;
+    UPROPERTY(EditAnywhere, Category="Facade") bool bAutoFacade = true;
+    UPROPERTY(EditAnywhere, Category="Facade", meta=(EditCondition="!bAutoFacade",EditConditionHides)) TArray<EDeepLevelBuildingVolumeFace> Facades;
+#if WITH_EDITORONLY_DATA
+    UPROPERTY() FName WindowSource;
+    UPROPERTY() bool bAutoCandidate = false;
+#endif
+    FDeepLevelCityBuildingDecorationEntry MakeEntry() const;
+};
+
+USTRUCT(BlueprintType)
+struct DEEPLEVELDESIGNPCG_API FDeepLevelCityWindowState
+{
+    GENERATED_BODY()
+    UPROPERTY(VisibleAnywhere, Category="Identity") FGuid EntryGuid;
+    UPROPERTY(EditAnywhere, Category="Window") FGuid WindowGuid;
+    UPROPERTY(EditAnywhere, Category="Lighting") bool bEnabled = false;
+    UPROPERTY(EditAnywhere, Category="Lighting",meta=(HideAlphaChannel)) FLinearColor Color = FLinearColor::White;
+    UPROPERTY(EditAnywhere, Category="Lighting",meta=(ClampMin="0")) float Brightness = 1.f;
+    UPROPERTY(EditAnywhere, Category="Lighting") TSoftObjectPtr<UMaterialInterface> Material;
 };
 
 /** Persisted authoring relation; cooked variants keep only their baked entries. */
@@ -92,7 +169,7 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityDecorationSymmetryPair
 #endif
 };
 
-/** One complete decoration arrangement. Empty entries define an undecorated variant. */
+/** One arrangement within a selection group. Empty entries omit that group. */
 USTRUCT(BlueprintType)
 struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuildingDecorationVariant
 {
@@ -107,8 +184,15 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityBuildingDecorationVariant
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Variant", meta = (ClampMin = "0.0"))
 	double SelectionWeight = 1.0;
 
+	// Choose one arrangement per group. None is the original base arrangement.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Variant")
+	FName SelectionGroup;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Variant", meta = (TitleProperty = "Name"))
 	TArray<FDeepLevelCityBuildingDecorationEntry> Entries;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Window Lighting")
+    TArray<FDeepLevelCityWindowState> WindowStates;
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY()
@@ -139,6 +223,22 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Decoration", meta = (TitleProperty = "Name"))
 	TArray<FDeepLevelCityBuildingDecorationVariant> Variants;
+
+    UPROPERTY(EditAnywhere, Category="Window Definitions",meta=(TitleProperty="Name"))
+    TArray<FDeepLevelCityWindowDefinition> WindowDefinitions;
+
+    FDeepLevelCityBuildingDecorationVariant BuildVariantView(const FDeepLevelCityBuildingDecorationVariant& Variant) const;
+#if WITH_EDITOR
+    void ExpandWindowEntries();
+    void CompactWindowEntries(FGuid GeometryOwnerVariant = {});
+#endif
+
+#if WITH_EDITORONLY_DATA
+    UPROPERTY(EditAnywhere, Category = "Window Lighting")
+    TSoftObjectPtr<UMaterialInterface> WindowMaterial;
+    UPROPERTY(EditAnywhere, Category="Window Lighting", meta=(TitleProperty="Name"))
+    TArray<FDeepLevelCityWindowAppearance> WindowAppearances;
+#endif
 
 	bool Validate(FText& OutError) const;
 	void GetValidationIssues(TArray<FDeepLevelCityBuildingDecorationIssue>& Issues) const;

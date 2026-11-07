@@ -1,3 +1,5 @@
+#include "Engine/World.h"
+#include "Road/Traffic/DeepLevelRoadZoneGraph.h"
 // Copyright <--\, Inc. All Rights Reserved.
 
 #include "Road/DeepLevelRoadEditor.h"
@@ -119,6 +121,12 @@ void FDeepLevelRoadEditorRefreshService::HandleRoadNetworkChanged(
 	ADeepLevelRoadNetworkActor& Network,
 	const EDeepLevelRoadNetworkChange Change)
 {
+    if ((Change == EDeepLevelRoadNetworkChange::GeneratedComponents || Change == EDeepLevelRoadNetworkChange::Traffic) && Network.GetWorld() && !Network.GetWorld()->IsGameWorld())
+    {
+        FText Error;
+        if (!DeepLevelRoadZoneGraph::Rebuild(Network,Error))
+            UE_LOG(LogTemp, Error, TEXT("Road ZoneGraph: %s"), *Error.ToString());
+    }
 	if (Change != EDeepLevelRoadNetworkChange::Geometry)
 	{
 		FLevelEditorModule& LevelEditor = FModuleManager::LoadModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));

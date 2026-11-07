@@ -12,6 +12,8 @@
 #include "IDetailsView.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "Materials/MaterialInterface.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "STransformViewportToolbar.h"
@@ -26,7 +28,7 @@
 namespace Authoring = DeepLevelCityDecorationAuthoring;
 
 
-TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildWorkspace()
+TSharedRef<SWidget> FDeepLevelCityDecorationWorkspace::BuildWorkspace()
 {
 	return SNew(SVerticalBox)
 	+ SVerticalBox::Slot().FillHeight(1)
@@ -61,20 +63,20 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildWorkspace()
 		{
 			return IssueItems.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible;
 		})))
-		.HeaderContent()[SNew(STextBlock).Text(this, &FDeepLevelCityBuildingDecorationEditor::GetStatusText)]
+		.HeaderContent()[SNew(STextBlock).Text(this, &FDeepLevelCityDecorationWorkspace::GetStatusText)]
 		.BodyContent()
 		[
 			SNew(SBox).MaxDesiredHeight(110)
 			[
 				SAssignNew(IssueList, SListView<TSharedPtr<FDeepLevelCityDecorationDocumentIssue>>).ListItemsSource(&IssueItems)
-				.OnGenerateRow(this, &FDeepLevelCityBuildingDecorationEditor::IssueRow)
-				.OnSelectionChanged(this, &FDeepLevelCityBuildingDecorationEditor::IssueSelected)
+				.OnGenerateRow(this, &FDeepLevelCityDecorationWorkspace::IssueRow)
+				.OnSelectionChanged(this, &FDeepLevelCityDecorationWorkspace::IssueSelected)
 			]
 		]
 	];
 }
 
-TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportOverlay()
+TSharedRef<SWidget> FDeepLevelCityDecorationWorkspace::BuildViewportOverlay()
 {
 	const auto Shortcuts = SNew(SGridPanel).FillColumn(1, 1.0f);
 	for (int32 Row = 0; Row < 4; ++Row)
@@ -102,14 +104,14 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportOverlay
 	+ SHorizontalBox::Slot().FillWidth(0.65f).VAlign(VAlign_Top).Padding(0, 0, 20, 0)[Shortcuts]
 	+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Top)
 	[
-		SNew(STextBlock).Text(this, &FDeepLevelCityBuildingDecorationEditor::GetViewportStatus)
+		SNew(STextBlock).Text(this, &FDeepLevelCityDecorationWorkspace::GetViewportStatus)
 		.Justification(ETextJustify::Right).AutoWrapText(true)
 		.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black)
 		.ColorAndOpacity(FLinearColor::White)
 	];
 }
 
-TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSetup()
+TSharedRef<SWidget> FDeepLevelCityDecorationWorkspace::BuildSetup()
 {
 	return SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(4)
 	[
@@ -123,7 +125,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSetup()
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(70)[SNew(STextBlock).Text(LOCTEXT("Set", "City set"))]]
 				+ SHorizontalBox::Slot().FillWidth(1)[SNew(SObjectPropertyEntryBox).AllowedClass(UDeepLevelCityDecorationSet::StaticClass())
-					.ObjectPath(this, &FDeepLevelCityBuildingDecorationEditor::GetSetPath).OnObjectChanged(this, &FDeepLevelCityBuildingDecorationEditor::ChooseSet)]
+					.ObjectPath(this, &FDeepLevelCityDecorationWorkspace::GetSetPath).OnObjectChanged(this, &FDeepLevelCityDecorationWorkspace::ChooseSet)]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(2)
 			[
@@ -131,20 +133,20 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSetup()
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(70)[SNew(STextBlock).Text(LOCTEXT("Catalog", "Catalog"))]]
 				+ SHorizontalBox::Slot().FillWidth(1)[SNew(SObjectPropertyEntryBox).AllowedClass(UDeepLevelBuildingPlacementCatalog::StaticClass())
 					.IsEnabled(TAttribute<bool>::Create(TAttribute<bool>::FGetter::CreateSPLambda(SharedThis(this), [this] { return Document->GetSet() != nullptr; })))
-					.ObjectPath(this, &FDeepLevelCityBuildingDecorationEditor::GetCatalogPath).OnObjectChanged(this, &FDeepLevelCityBuildingDecorationEditor::ChooseCatalog)]
+					.ObjectPath(this, &FDeepLevelCityDecorationWorkspace::GetCatalogPath).OnObjectChanged(this, &FDeepLevelCityDecorationWorkspace::ChooseCatalog)]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(2)
 			[
 				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton")
 				.Text(LOCTEXT("SetSettings", "Edit city settings"))
 				.IsEnabled(TAttribute<bool>::Create(TAttribute<bool>::FGetter::CreateSPLambda(SharedThis(this), [this] { return Document->GetSet() != nullptr; })))
-				.OnClicked(this, &FDeepLevelCityBuildingDecorationEditor::ShowSetSettings)
+				.OnClicked(this, &FDeepLevelCityDecorationWorkspace::ShowSetSettings)
 			]
 		]
 	];
 }
 
-TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
+TSharedRef<SWidget> FDeepLevelCityDecorationWorkspace::BuildOutline()
 {
 	return SNew(SBorder).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder")).Padding(4)
 	[
@@ -156,10 +158,10 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SNew(SButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").ToolTipText(LOCTEXT("AddVariantTip", "Add a variant to the selected building"))
-				.IsEnabled(this, &FDeepLevelCityBuildingDecorationEditor::CanEdit)
-				.OnClicked_Lambda([Weak = TWeakPtr<FDeepLevelCityBuildingDecorationEditor>(SharedThis(this))]
+				.IsEnabled(this, &FDeepLevelCityDecorationWorkspace::CanEdit)
+				.OnClicked_Lambda([Weak = TWeakPtr<FDeepLevelCityDecorationWorkspace>(SharedThis(this))]
 				{
-					if (const auto Pinned = Weak.Pin()) { Pinned->Document->AddVariant(); }
+					if (const auto Pinned = Weak.Pin()) { Pinned->AddArrangement(); }
 					return FReply::Handled();
 				})
 				[SNew(SImage).Image(FAppStyle::GetBrush("Icons.Plus"))]
@@ -168,7 +170,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 			[
 				SNew(SComboButton).ButtonStyle(FAppStyle::Get(), "SimpleButton").HasDownArrow(false)
 				.ToolTipText(LOCTEXT("Actions", "Selection actions"))
-				.OnGetMenuContent_Lambda([Weak = TWeakPtr<FDeepLevelCityBuildingDecorationEditor>(SharedThis(this))]() -> TSharedRef<SWidget>
+				.OnGetMenuContent_Lambda([Weak = TWeakPtr<FDeepLevelCityDecorationWorkspace>(SharedThis(this))]() -> TSharedRef<SWidget>
 				{
 					const auto Pinned = Weak.Pin();
 					return Pinned ? Pinned->BuildSelectionMenu().ToSharedRef() : SNullWidget::NullWidget;
@@ -176,10 +178,37 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 				.ButtonContent()[SNew(SImage).Image(FAppStyle::GetBrush("Icons.Settings"))]
 			]
 		]
+        + SVerticalBox::Slot().AutoHeight().Padding(2)
+        [
+            SNew(SVerticalBox)
+            .Visibility(TAttribute<EVisibility>::Create(TAttribute<EVisibility>::FGetter::CreateSPLambda(SharedThis(this), [this] { return bWindowLightingMode ? EVisibility::Visible : EVisibility::Collapsed; })))
+            + SVerticalBox::Slot().AutoHeight().Padding(0,3)
+            [SNew(SButton).Text(LOCTEXT("WindowAppearanceSettings", "Shared window definitions & appearance palette"))
+                .OnClicked(this, &FDeepLevelCityDecorationWorkspace::ShowWindowSettings)]
+            + SVerticalBox::Slot().AutoHeight().Padding(0,3)
+            [SNew(SButton).Text(LOCTEXT("ScanWindows", "Import / refresh whole windows"))
+                .ToolTipText(LOCTEXT("ScanWindowsTip", "Import translucent glass modules from this building. Preserve saved switches and colors. Opaque walls and door glass are excluded."))
+                .IsEnabled(this, &FDeepLevelCityDecorationWorkspace::CanEdit)
+                .OnClicked(this, &FDeepLevelCityDecorationWorkspace::ImportWindowLighting)]
+            + SVerticalBox::Slot().AutoHeight().Padding(0,3)
+            [SNew(SHorizontalBox)
+                + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Fill", "Fill"))]
+                + SHorizontalBox::Slot().FillWidth(1).Padding(4,0)[SNew(SSpinBox<float>).MinValue(0.f).MaxValue(1.f).Delta(.05f)
+                    .Value_Lambda([this] { return WindowDensity; }).OnValueChanged_Lambda([this](float Value) { WindowDensity = Value; })]
+                + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("ApplyFill", "Apply fill"))
+                    .IsEnabled(this, &FDeepLevelCityDecorationWorkspace::HasVariant)
+                    .OnClicked_Lambda([this] { Document->FillWindows(WindowDensity, WindowSeed); return FReply::Handled(); })]]
+            + SVerticalBox::Slot().AutoHeight().Padding(0,3)
+            [SNew(SSpinBox<int32>).MinValue(0).MaxValue(TNumericLimits<int32>::Max()).ToolTipText(LOCTEXT("Seed", "Seed used by Apply fill. Saved window switches remain deterministic."))
+                .Value_Lambda([this] { return WindowSeed; }).OnValueChanged_Lambda([this](int32 Value) { WindowSeed = Value; })]
+            + SVerticalBox::Slot().AutoHeight().Padding(0,3)
+            [SNew(STextBlock).Text(LOCTEXT("WindowHelp", "Each row is a whole window module. Switch it here; select it for color and brightness. Imported transoms start off."))
+                .AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())]
+        ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(2)
 		[
 			SNew(SSearchBox).HintText(LOCTEXT("SearchOutline", "Search buildings, variants, decorations"))
-			.OnTextChanged(this, &FDeepLevelCityBuildingDecorationEditor::SearchChanged)
+			.OnTextChanged(this, &FDeepLevelCityDecorationWorkspace::SearchChanged)
 		]
 		+ SVerticalBox::Slot().FillHeight(1)
 		[
@@ -192,15 +221,15 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 				{
 					return Preview->GetCommandList()->ProcessCommandBindings(Key) ? FReply::Handled() : FReply::Unhandled();
 				}))
-				.OnGenerateRow(this, &FDeepLevelCityBuildingDecorationEditor::OutlineRow)
-				.OnGetChildren(this, &FDeepLevelCityBuildingDecorationEditor::OutlineChildren)
-				.OnSelectionChanged(this, &FDeepLevelCityBuildingDecorationEditor::OutlineSelected)
-				.OnExpansionChanged(this, &FDeepLevelCityBuildingDecorationEditor::OutlineExpansionChanged)
-				.OnContextMenuOpening(this, &FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu)
+				.OnGenerateRow(this, &FDeepLevelCityDecorationWorkspace::OutlineRow)
+				.OnGetChildren(this, &FDeepLevelCityDecorationWorkspace::OutlineChildren)
+				.OnSelectionChanged(this, &FDeepLevelCityDecorationWorkspace::OutlineSelected)
+				.OnExpansionChanged(this, &FDeepLevelCityDecorationWorkspace::OutlineExpansionChanged)
+				.OnContextMenuOpening(this, &FDeepLevelCityDecorationWorkspace::BuildSelectionMenu)
 			]
 			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(12)
 			[
-				SNew(STextBlock).Text(this, &FDeepLevelCityBuildingDecorationEditor::GetOutlineHint).AutoWrapText(true)
+				SNew(STextBlock).Text(this, &FDeepLevelCityDecorationWorkspace::GetOutlineHint).AutoWrapText(true)
 				.Visibility(TAttribute<EVisibility>::Create(TAttribute<EVisibility>::FGetter::CreateSPLambda(SharedThis(this), [this]
 				{
 					return OutlineItems.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
@@ -215,7 +244,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildOutline()
 	];
 }
 
-TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportControls()
+TSharedRef<SWidget> FDeepLevelCityDecorationWorkspace::BuildViewportControls()
 {
 	const auto Toggle = [this](const FText& Label, bool* Flag, TFunction<void()> Changed)
 	{
@@ -247,7 +276,7 @@ TSharedRef<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildViewportControl
 }
 
 
-void FDeepLevelCityBuildingDecorationEditor::RefreshOutline()
+void FDeepLevelCityDecorationWorkspace::RefreshOutline()
 {
 	OutlineItems.Reset();
 	const auto* Catalog = Document->GetCatalog();
@@ -264,20 +293,30 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshOutline()
 			Building->Label = FText::FromString(Path.GetAssetName());
 			Building->Icon = TEXT("ClassIcon.PackedLevelActor");
 			const auto* Profile = Document->GetProfileForBuilding(Definition.BuildingClass);
-			Building->Detail = Profile ? FText::Format(LOCTEXT("VariantCount", "{0} variants"), FText::AsNumber(Profile->Variants.Num())) : LOCTEXT("NoProfileBadge", "Profile unavailable");
+			const int32 VisibleVariants = Profile ? Profile->Variants.FilterByPredicate([this](const auto& V)
+                {
+                    const bool bWindows = V.SelectionGroup == FName(TEXT("NightWindows")) || V.Entries.ContainsByPredicate([](const auto& E) { return E.bWindowLight; });
+                    return bWindowLightingMode ? bWindows : V.SelectionGroup != FName(TEXT("NightWindows"));
+                }).Num() : 0;
+                Building->Detail = Profile ? FText::Format(LOCTEXT("VariantCount", "{0} variants"), FText::AsNumber(VisibleVariants)) : LOCTEXT("NoProfileBadge", "Profile unavailable");
 			if (Profile)
 			{
-				for (const auto& Variant : Profile->Variants)
+				for (const auto& StoredVariant : Profile->Variants)
 				{
+                    const auto Variant = Profile->BuildVariantView(StoredVariant);
+                    const bool bWindows = Variant.SelectionGroup == FName(TEXT("NightWindows")) || Variant.Entries.ContainsByPredicate([](const auto& E) { return E.bWindowLight; });
+                    if (bWindowLightingMode && !bWindows) continue;
+                    if (!bWindowLightingMode && Variant.SelectionGroup == FName(TEXT("NightWindows"))) continue;
 					auto Row = MakeShared<FDeepLevelCityDecorationOutlineItem>();
 					Row->Kind = EDeepLevelCityDecorationOutlineKind::Variant;
 					Row->Building = Path;
 					Row->Variant = Variant.VariantGuid;
 					Row->Label = FText::FromName(Variant.Name);
-					Row->Detail = FText::Format(LOCTEXT("EntryCount", "{0} decorations"), FText::AsNumber(Variant.Entries.Num()));
+					Row->Detail = FText::Format(bWindowLightingMode ? LOCTEXT("WindowStateCount", "{0} window states") : LOCTEXT("EntryCount", "{0} decorations"), FText::AsNumber(Variant.Entries.Num()));
 					Row->Icon = TEXT("Icons.FolderOpen");
 					for (const auto& Entry : Variant.Entries)
 					{
+                        if (bWindowLightingMode && !Entry.bWindowLight) continue;
 						auto Child = MakeShared<FDeepLevelCityDecorationOutlineItem>();
 						Child->Kind = EDeepLevelCityDecorationOutlineKind::Entry;
 						Child->Building = Path;
@@ -288,7 +327,7 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshOutline()
 						{
 							Child->Detail = LOCTEXT("LinkedSymmetry", "Linked");
 						}
-						Child->Icon = Entry.Output == EDeepLevelCityDecorationOutput::Mesh ? TEXT("ClassIcon.StaticMesh")
+						Child->Icon = Entry.bWindowLight ? TEXT("ClassIcon.PointLight") : Entry.Output == EDeepLevelCityDecorationOutput::Mesh ? TEXT("ClassIcon.StaticMesh")
 							: Entry.Output == EDeepLevelCityDecorationOutput::Decal ? TEXT("ClassIcon.DecalActor") : TEXT("ClassIcon.Actor");
 						Row->Children.Add(Child);
 					}
@@ -324,7 +363,7 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshOutline()
 }
 
 
-void FDeepLevelCityBuildingDecorationEditor::SynchronizeOutlineSelection()
+void FDeepLevelCityDecorationWorkspace::SynchronizeOutlineSelection()
 {
 	if (!Outline) { return; }
 	Outline->ClearSelection();
@@ -359,14 +398,14 @@ void FDeepLevelCityBuildingDecorationEditor::SynchronizeOutlineSelection()
 	}
 }
 
-void FDeepLevelCityBuildingDecorationEditor::SearchChanged(const FText& Text)
+void FDeepLevelCityDecorationWorkspace::SearchChanged(const FText& Text)
 {
 	Search = Text.ToString();
 	TGuardValue<bool> Guard(bRefreshing, true);
 	RefreshOutline();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::OutlineClicked(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item)
+void FDeepLevelCityDecorationWorkspace::OutlineClicked(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item)
 {
 	if (bRefreshing || !Item) { return; }
 	bSetSettings = false;
@@ -384,7 +423,7 @@ void FDeepLevelCityBuildingDecorationEditor::OutlineClicked(TSharedPtr<FDeepLeve
 	RefreshInspector();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::OutlineSelected(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item, ESelectInfo::Type SelectInfo)
+void FDeepLevelCityDecorationWorkspace::OutlineSelected(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item, ESelectInfo::Type SelectInfo)
 {
 	if (bRefreshing || SelectInfo == ESelectInfo::Direct) { return; }
 	if (Item && Item->Kind != EDeepLevelCityDecorationOutlineKind::Entry) { OutlineClicked(Item); return; }
@@ -406,43 +445,60 @@ void FDeepLevelCityBuildingDecorationEditor::OutlineSelected(TSharedPtr<FDeepLev
 	Document->SelectEntries(Ids);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::OutlineChildren(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item,
+void FDeepLevelCityDecorationWorkspace::OutlineChildren(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item,
 	TArray<TSharedPtr<FDeepLevelCityDecorationOutlineItem>>& Children) const
 {
 	Children.Append(Item->Children);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::OutlineExpansionChanged(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item, bool bExpanded)
+void FDeepLevelCityDecorationWorkspace::OutlineExpansionChanged(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item, bool bExpanded)
 {
 	if (bRefreshing || !Search.IsEmpty()) { return; }
 	if (bExpanded) { ExpandedOutlineItems.Add(Item->Key()); }
 	else { ExpandedOutlineItems.Remove(Item->Key()); }
 }
 
-TSharedRef<ITableRow> FDeepLevelCityBuildingDecorationEditor::OutlineRow(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item,
+TSharedRef<ITableRow> FDeepLevelCityDecorationWorkspace::OutlineRow(TSharedPtr<FDeepLevelCityDecorationOutlineItem> Item,
 	const TSharedRef<STableViewBase>& Owner)
 {
 	return SNew(STableRow<TSharedPtr<FDeepLevelCityDecorationOutlineItem>>, Owner).Padding(FMargin(2, 4))
 	[
 		SNew(SHorizontalBox)
+        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+        [SNew(SCheckBox)
+            .Visibility(Item->Kind == EDeepLevelCityDecorationOutlineKind::Entry ? EVisibility::Visible : EVisibility::Collapsed)
+            .IsChecked_Lambda([this, Item]
+            {
+                const auto* P = Document->GetProfileForBuilding(TSoftClassPtr<AActor>(Item->Building));
+                const auto* V = P ? Authoring::FindVariant(*P, Item->Variant) : nullptr;
+                const auto View = V ? P->BuildVariantView(*V) : FDeepLevelCityBuildingDecorationVariant();
+                const auto* E = View.Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Item->Entry; });
+                return E && E->bEnabled ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+            })
+            .OnCheckStateChanged_Lambda([this, Item](ECheckBoxState State)
+            {
+                if (!Document->SelectBuilding(TSoftClassPtr<AActor>(Item->Building))) return;
+                Document->SelectVariant(Item->Variant);
+                Document->SetEntryEnabled(Item->Entry, State == ECheckBoxState::Checked);
+            })]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(2, 0, 6, 0)[SNew(SImage).Image(FAppStyle::GetBrush(Item->Icon)).DesiredSizeOverride(FVector2D(16))]
 		+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).Text(Item->Label).ToolTipText(FText::FromString(Item->Building.ToString()))]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0)[SNew(STextBlock).Text(Item->Detail).ColorAndOpacity(FSlateColor::UseSubduedForeground())]
 	];
 }
 
-TSharedPtr<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu()
+TSharedPtr<SWidget> FDeepLevelCityDecorationWorkspace::BuildSelectionMenu()
 {
 	FMenuBuilder Menu(true, Preview->GetCommandList());
 	Menu.BeginSection("Building", LOCTEXT("BuildingActions", "Building"));
 	Menu.AddMenuEntry(LOCTEXT("AddVariant", "Add variant"), LOCTEXT("AddVariantTip", "Add a variant to the selected building"), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Plus"),
-		FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { Document->AddVariant(); }), FCanExecuteAction::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::CanEdit)));
+		FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { AddArrangement(); }), FCanExecuteAction::CreateSP(this, &FDeepLevelCityDecorationWorkspace::CanEdit)));
 	if (CanCreateProfile())
 	{
 		Menu.AddMenuEntry(LOCTEXT("CreateProfile", "Create profile"), FText::GetEmpty(), FSlateIcon(),
 			FUIAction(FExecuteAction::CreateSPLambda(SharedThis(this), [this] { CreateProfile(); })));
 		Menu.AddWidget(SNew(SObjectPropertyEntryBox).AllowedClass(UDeepLevelCityBuildingDecorationProfile::StaticClass())
-			.OnObjectChanged(this, &FDeepLevelCityBuildingDecorationEditor::AttachProfile), LOCTEXT("AttachProfile", "Attach profile"));
+			.OnObjectChanged(this, &FDeepLevelCityDecorationWorkspace::AttachProfile), LOCTEXT("AttachProfile", "Attach profile"));
 	}
 	if (CanUnlinkProfile())
 	{
@@ -459,7 +515,7 @@ TSharedPtr<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu()
 		{
 			Menu.AddMenuEntry(FGenericCommands::Get().Copy);
 			Menu.AddSubMenu(LOCTEXT("SymmetryMenu", "Symmetry"), LOCTEXT("SymmetryTip", "Preview mirrors or manage the selected links"),
-				FNewMenuDelegate::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::BuildSymmetryMenu));
+				FNewMenuDelegate::CreateSP(this, &FDeepLevelCityDecorationWorkspace::BuildSymmetryMenu));
 			if (Document->GetSelectedEntryIds().Num() == 1)
 			{
 				Menu.AddMenuEntry(LOCTEXT("MoveUp", "Move up"), FText::GetEmpty(), FSlateIcon(),
@@ -475,7 +531,7 @@ TSharedPtr<SWidget> FDeepLevelCityBuildingDecorationEditor::BuildSelectionMenu()
 }
 
 
-void FDeepLevelCityBuildingDecorationEditor::BuildSymmetryMenu(FMenuBuilder& Menu)
+void FDeepLevelCityDecorationWorkspace::BuildSymmetryMenu(FMenuBuilder& Menu)
 {
 	if (Document->GetSelectedEntryIds().Num() == 1 || Document->IsSymmetryPivotSelected())
 	{
@@ -523,14 +579,14 @@ void FDeepLevelCityBuildingDecorationEditor::BuildSymmetryMenu(FMenuBuilder& Men
 	const auto AddExisting = [&](const FText& Label, EAxis::Type Axis)
 	{
 		Menu.AddSubMenu(Label, LOCTEXT("LinkExistingTip", "Link another decoration in this variant, keeping both placements as offsets. Assets can differ."),
-			FNewMenuDelegate::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::BuildExistingSymmetryMenu, Axis));
+			FNewMenuDelegate::CreateSP(this, &FDeepLevelCityDecorationWorkspace::BuildExistingSymmetryMenu, Axis));
 	};
 	AddExisting(LOCTEXT("LinkExistingX", "Link existing across X"), EAxis::X);
 	AddExisting(LOCTEXT("LinkExistingY", "Link existing across Y"), EAxis::Y);
 	AddExisting(LOCTEXT("LinkExistingZ", "Link existing across Z"), EAxis::Z);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::BuildExistingSymmetryMenu(FMenuBuilder& Menu, EAxis::Type Axis)
+void FDeepLevelCityDecorationWorkspace::BuildExistingSymmetryMenu(FMenuBuilder& Menu, EAxis::Type Axis)
 {
 	const auto* Variant = Document->GetVariant();
 	if (!Variant) { return; }
@@ -558,13 +614,13 @@ void FDeepLevelCityBuildingDecorationEditor::BuildExistingSymmetryMenu(FMenuBuil
 	}
 }
 
-FText FDeepLevelCityBuildingDecorationEditor::GetOutlineHint() const
+FText FDeepLevelCityDecorationWorkspace::GetOutlineHint() const
 {
 	if (!Document->GetCatalog()) { return LOCTEXT("ChooseSetup", "Choose a city set and building catalog in City setup."); }
 	return Search.IsEmpty() ? LOCTEXT("EmptyCatalog", "The building catalog is empty.") : LOCTEXT("NoMatches", "No matching buildings, variants or decorations.");
 }
 
-void FDeepLevelCityBuildingDecorationEditor::IssueSelected(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Item, ESelectInfo::Type)
+void FDeepLevelCityDecorationWorkspace::IssueSelected(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Item, ESelectInfo::Type)
 {
 	if (bRefreshing || !Item) { return; }
 	if (!Item->Building.IsNull() && Document->SelectBuilding(TSoftClassPtr<AActor>(Item->Building)))
@@ -574,7 +630,7 @@ void FDeepLevelCityBuildingDecorationEditor::IssueSelected(TSharedPtr<FDeepLevel
 	}
 }
 
-void FDeepLevelCityBuildingDecorationEditor::RefreshIssues()
+void FDeepLevelCityDecorationWorkspace::RefreshIssues()
 {
 	IssueItems.Reset();
 	for (const auto& Issue : Document->GetIssues()) { IssueItems.Add(MakeShared<FDeepLevelCityDecorationDocumentIssue>(Issue)); }
@@ -586,7 +642,7 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshIssues()
 	if (!OperationError.IsEmpty()) { IssueItems.Add(MakeShared<FDeepLevelCityDecorationDocumentIssue>(FDeepLevelCityDecorationDocumentIssue{{}, {}, {}, OperationError})); }
 	if (IssueList) { IssueList->RequestListRefresh(); }
 }
-TSharedRef<ITableRow> FDeepLevelCityBuildingDecorationEditor::IssueRow(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Item, const TSharedRef<STableViewBase>& Owner)
+TSharedRef<ITableRow> FDeepLevelCityDecorationWorkspace::IssueRow(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Item, const TSharedRef<STableViewBase>& Owner)
 {
 	const UDeepLevelCityBuildingDecorationProfile* Profile = nullptr;
 	if (const auto* Set = Document->GetSet())
@@ -609,14 +665,54 @@ TSharedRef<ITableRow> FDeepLevelCityBuildingDecorationEditor::IssueRow(TSharedPt
 		[
 			SNew(SButton).Text(LOCTEXT("Unlink", "Unlink profile"))
 			.Visibility(Item->AssignmentIndex == INDEX_NONE ? EVisibility::Collapsed : EVisibility::Visible)
-			.OnClicked(this, &FDeepLevelCityBuildingDecorationEditor::UnlinkIssue, Item)
+			.OnClicked(this, &FDeepLevelCityDecorationWorkspace::UnlinkIssue, Item)
 		]
 	];
 }
-FText FDeepLevelCityBuildingDecorationEditor::GetStatusText() const
+FText FDeepLevelCityDecorationWorkspace::GetStatusText() const
 {
 	if (!IssueItems.IsEmpty()) { return FText::Format(LOCTEXT("Issues", "{0} issues - select a row to inspect"), FText::AsNumber(IssueItems.Num())); }
 	if (!Document->GetProfile()) { return LOCTEXT("NoProfile", "Selected building has no profile. Create one or attach a matching profile."); }
 	return LOCTEXT("Ready", "Profile linked and valid. Save assets here; regenerate the city separately.");
 }
+void FDeepLevelCityDecorationWorkspace::AddArrangement()
+{
+    Document->AddVariant();
+    if (bWindowLightingMode) Document->SetVariantFields(TEXT("Window arrangement"), 1, TEXT("NightWindows"));
+}
+
+void FDeepLevelCityBuildingDecorationEditor::OpenWindowBuilding(const TSoftClassPtr<AActor>& Building)
+{
+    Windows->Document->SelectBuilding(Building);
+    Windows->SetWindowLightingMode(true);
+    GetTabManager()->TryInvokeTab(WindowsTab);
+}
+void FDeepLevelCityDecorationWorkspace::SetWindowLightingMode(const bool bValue)
+{
+    bWindowLightingMode = bValue;
+    if (const auto* Profile = Document->GetProfile())
+    {
+        if (const auto* V = Document->GetVariant(); V && V->SelectionGroup.IsNone()) PreviewBaseVariant = V->VariantGuid;
+        if (!Authoring::FindVariant(*Profile, PreviewBaseVariant))
+            for (const auto& V : Profile->Variants) if (V.SelectionGroup.IsNone()) { PreviewBaseVariant = V.VariantGuid; break; }
+        if (bValue)
+        {
+            for (const auto& V : Profile->Variants)
+                if (V.SelectionGroup == FName(TEXT("NightWindows"))) { Document->SelectVariant(V.VariantGuid); break; }
+        }
+        else if (PreviewBaseVariant.IsValid()) Document->SelectVariant(PreviewBaseVariant);
+    }
+    RefreshOutline(); RefreshInspector();
+    Preview->Synchronize(Document->GetBuildingClass(), Document->GetProfile(), Document->GetVariantId(), bValue ? PreviewBaseVariant : FGuid());
+}
+FReply FDeepLevelCityDecorationWorkspace::ImportWindowLighting()
+{
+    const auto* Profile = Document->GetProfile();
+    FText Error;
+    if (!Profile || !Document->ImportWindows(Profile->WindowMaterial.LoadSynchronous(), Error))
+    { OperationError = Error; RefreshIssues(); }
+    else SetWindowLightingMode(true);
+    return FReply::Handled();
+}
+
 #undef LOCTEXT_NAMESPACE

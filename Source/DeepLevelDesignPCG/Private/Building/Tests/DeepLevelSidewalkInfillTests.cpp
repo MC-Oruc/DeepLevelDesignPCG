@@ -5,6 +5,9 @@
 #include "Misc/AutomationTest.h"
 #include "PackedLevelActor/PackedLevelActor.h"
 #include "Road/DeepLevelRoadPCG.h"
+#include "Serialization/ObjectReader.h"
+#include "Serialization/ObjectWriter.h"
+#include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -91,6 +94,33 @@ bool FDeepLevelRoadSidewalkInfillTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("Infill never replaces the road cell"), Placement.GridCell == FIntPoint(1, 0));
 		}
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelSidewalkInfillPersistenceTest,
+	"DeepLevelDesignPCG.Editor.BuildingLine.SidewalkInfillPersistence",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelSidewalkInfillPersistenceTest::RunTest(const FString& Parameters)
+{
+	auto* Source = NewObject<ADeepLevelPCGRoadsideBuildingActor>();
+	auto* Restored = NewObject<ADeepLevelPCGRoadsideBuildingActor>();
+	const FArrayProperty* Property = FindFProperty<FArrayProperty>(Source->GetClass(), TEXT("GeneratedSidewalkInfills"));
+	if (!TestNotNull(TEXT("Generated infills are serialized output"), Property)) return false;
+	TestFalse(TEXT("Infills are not transient"), Property->HasAnyPropertyFlags(CPF_Transient));
+	auto* Anchors = Property->ContainerPtrToValuePtr<TArray<FDeepLevelCityAnchor>>(Source);
+	FDeepLevelCityAnchor& Anchor = Anchors->Emplace_GetRef();
+	Anchor.StableId = FGuid(1, 2, 3, 4);
+	Source->bOutputCurrent = true;
+	TArray<uint8> Bytes;
+	FObjectWriter Writer(Source, Bytes);
+	FObjectReader Reader(Restored, Bytes);
+	FDeepLevelCityLayoutFragment Fragment;
+	FText Error;
+	TestTrue(TEXT("Reloaded output publishes without a prepared plan"), Restored->BuildCityLayoutFragment(
+		FDeepLevelCityGrid{FVector::ZeroVector, 500.0, 16}, Fragment, Error));
+	TestEqual(TEXT("Infill survives serialization"), Fragment.Anchors.Num(), 1);
+	if (Fragment.Anchors.Num() == 1) TestEqual(TEXT("Infill identity survives"), Fragment.Anchors[0].StableId, Anchor.StableId);
 	return true;
 }
 

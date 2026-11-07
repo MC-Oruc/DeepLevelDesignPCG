@@ -181,7 +181,7 @@ bool ADeepLevelCityLayoutActor::RefreshSnapshot(TSet<FIntPoint>& OutDirtyChunks,
 	}
 
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot> NewSnapshot;
-	if (!FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, NewSnapshot, OutError))
+	if (!FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, NewSnapshot, OutError, FacadeSeamTolerance))
 	{
 		return false;
 	}
@@ -282,7 +282,8 @@ bool FDeepLevelCityLayoutBuilder::Build(
 	const FDeepLevelCityGrid& Grid,
 	const TConstArrayView<FDeepLevelCityLayoutFragment> Fragments,
 	TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot,
-	FText& OutError)
+	FText& OutError,
+	const double FacadeSeamTolerance)
 {
 	OutSnapshot.Reset();
 	if (!Grid.Validate(OutError))
@@ -350,7 +351,7 @@ bool FDeepLevelCityLayoutBuilder::Build(
 	{
 		return A.StableId < B.StableId;
 	});
-	if (!DeepLevelBuildingFacades::Resolve(Snapshot->Buildings, Snapshot->Grid, Snapshot->Cells, OutError)) { return false; }
+	if (!DeepLevelBuildingFacades::Resolve(Snapshot->Buildings, Snapshot->Grid, Snapshot->Cells, OutError, FacadeSeamTolerance)) { return false; }
 	OutSnapshot = Snapshot;
 	OutError = FText::GetEmpty();
 	return true;

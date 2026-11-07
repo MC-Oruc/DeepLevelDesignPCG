@@ -13,6 +13,47 @@ class UMaterialInterface;
 class UStaticMesh;
 class UDeepLevelCityBuildingDecorationProfile;
 class UDeepLevelBuildingPlacementCatalog;
+class UHLODLayer;
+
+/** Component-level output policy; authored alongside the placement that owns it. */
+USTRUCT(BlueprintType)
+struct DEEPLEVELDESIGNPCG_API FDeepLevelCityDecorationRendering
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rendering", meta = (ClampMin = "0", Units = "cm"))
+	int32 MaxDrawDistance = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rendering")
+	bool bCastShadow = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Collision")
+	FName CollisionProfile = TEXT("BlockAllDynamic");
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Collision")
+	bool bAffectNavigation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rendering", meta = (ClampMin = "0.0001", ClampMax = "1"))
+	float DecalFadeScreenSize = 0.01f;
+
+	bool IsValid() const
+	{
+		return MaxDrawDistance >= 0 && !CollisionProfile.IsNone() && FMath::IsFinite(DecalFadeScreenSize)
+			&& DecalFadeScreenSize > 0.f && DecalFadeScreenSize <= 1.f;
+	}
+
+	bool operator==(const FDeepLevelCityDecorationRendering& Other) const
+	{
+		return MaxDrawDistance == Other.MaxDrawDistance && bCastShadow == Other.bCastShadow
+			&& CollisionProfile == Other.CollisionProfile && bAffectNavigation == Other.bAffectNavigation
+			&& DecalFadeScreenSize == Other.DecalFadeScreenSize;
+	}
+	friend uint32 GetTypeHash(const FDeepLevelCityDecorationRendering& Value)
+	{
+		return HashCombineFast(HashCombineFast(GetTypeHash(Value.MaxDrawDistance), GetTypeHash(Value.CollisionProfile)),
+			HashCombineFast(GetTypeHash(Value.DecalFadeScreenSize), (Value.bCastShadow ? 1u : 0u) | (Value.bAffectNavigation ? 2u : 0u)));
+	}
+};
 
 UENUM(BlueprintType)
 enum class EDeepLevelCityDecorationOutput : uint8
@@ -26,6 +67,9 @@ USTRUCT(BlueprintType)
 struct DEEPLEVELDESIGNPCG_API FDeepLevelCityDecorationEntry
 {
 	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Output")
+	FDeepLevelCityDecorationRendering Rendering;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Identity")
 	FGuid EntryGuid;
@@ -149,10 +193,13 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelCityResolvedDecoration
 	FGuid EntryGuid;
 	EDeepLevelCityDecorationOutput Output = EDeepLevelCityDecorationOutput::Mesh;
 	TSoftObjectPtr<UStaticMesh> Mesh;
+	TArray<float> InstanceData;
+	TSoftObjectPtr<UMaterialInterface> MaterialOverride;
 	TSoftClassPtr<AActor> ActorClass;
 	TSoftObjectPtr<UMaterialInterface> DecalMaterial;
 	FVector DecalSize = FVector(32.0);
 	FTransform Transform = FTransform::Identity;
+	FDeepLevelCityDecorationRendering Rendering;
 	FGameplayTagContainer Tags;
 	FIntPoint Chunk = FIntPoint::ZeroValue;
 	FName PlacementSlot = NAME_None;
@@ -179,7 +226,10 @@ struct FDeepLevelCityMaterializedChunk
 	GENERATED_BODY()
 
 	UPROPERTY()
-	TArray<TObjectPtr<UActorComponent>> Components;
+	TSoftObjectPtr<AActor> Actor;
+
+	UPROPERTY()
+	FGuid ActorGuid;
 
 	UPROPERTY()
 	FGuid ContentSignature;
@@ -193,12 +243,18 @@ class DEEPLEVELDESIGNPCG_API UDeepLevelCityDecorationComponent : public UActorCo
 
 public:
 	UDeepLevelCityDecorationComponent();
+	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Deep Level Design PCG|City Decoration")
 	bool Regenerate(bool bForceAll, FText& OutError);
 
 	UFUNCTION(CallInEditor, Category = "Deep Level Design PCG|City Decoration")
 	void RegenerateInEditor();
+
+#if WITH_EDITOR
+	TArray<UActorComponent*> GetGeneratedComponents() const;
+	TArray<AActor*> GetGeneratedActors() const;
+#endif
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|City Decoration|Diagnostics")
 	FText LastGenerationError;

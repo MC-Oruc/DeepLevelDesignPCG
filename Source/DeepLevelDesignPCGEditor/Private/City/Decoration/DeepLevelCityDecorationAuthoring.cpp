@@ -63,6 +63,11 @@ FGuid DeepLevelCityDecorationAuthoring::AddEntry(UDeepLevelCityBuildingDecoratio
 	if (!Variant) { return FGuid(); }
 	FDeepLevelCityBuildingDecorationEntry Copy = Definition;
 	Copy.EntryGuid = FGuid::NewGuid();
+	if (Copy.bWindowLight)
+	{
+		Copy.WindowDefinitionGuid.Invalidate();
+		Copy.WindowRoomGuid = FGuid::NewGuid();
+	}
 	const FGuid Id = Copy.EntryGuid;
 	Variant->Entries.Add(MoveTemp(Copy));
 	return Id;

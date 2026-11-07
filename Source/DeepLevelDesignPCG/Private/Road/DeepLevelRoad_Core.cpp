@@ -12,6 +12,7 @@
 #include "PCGGraph.h"
 #include "PCGManagedResource.h"
 #include "Data/PCGSplineData.h"
+#include "UObject/StrongObjectPtr.h"
 #include "Components/BillboardComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
@@ -203,7 +204,13 @@ void ADeepLevelRoadNetworkActor::RegenerateSidewalkInfills()
 {
 #if WITH_EDITOR
 	if (!GetWorld() || GetWorld()->IsGameWorld() || !PCGComponent
-		|| PCGComponent->IsGenerating() || !PCGComponent->GetGraph()) { return; }
+		|| !PCGComponent->GetGraph()) { return; }
+	if (PCGComponent->IsGenerating())
+	{
+		bSidewalkInfillRegenerationPending = true;
+		return;
+	}
+	bSidewalkInfillRegenerationPending = false;
 	PCGComponent->GenerateLocal(true);
 #endif
 }
@@ -212,6 +219,35 @@ void ADeepLevelRoadNetworkActor::SynchronizeTransformToCityLayout()
 {
 	if (!CityLayout || GetActorLocation().Equals(CityLayout->GetActorLocation(), 0.01)) { return; }
 	SetActorLocation(CityLayout->GetActorLocation());
+#if WITH_EDITOR
+    OnRoadNetworkEditorChanged.Broadcast(*this,EDeepLevelRoadNetworkChange::Traffic);
+#endif
+}
+
+bool ADeepLevelRoadNetworkActor::BuildRoadPlan(FDeepLevelRoadNetworkPlan& OutPlan, FText& OutError) const
+{
+	OutPlan = {};
+	FDeepLevelCityGrid Grid;
+	if (!ResolveCityGrid(Grid, OutError)) return false;
+	auto* LoadedCatalog = Catalog.LoadSynchronous();
+	if (!LoadedCatalog)
+	{
+		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "MissingRoadPlanCatalog", "Road Network requires a Road Tile Catalog.");
+		return false;
+	}
+	TArray<UDeepLevelRoadSplineComponent*> Components;
+	GetRoadSplineComponents(Components);
+	if (Components.IsEmpty()) return true;
+	TArray<TStrongObjectPtr<UPCGSplineData>> Owned;
+	TArray<const UPCGSplineData*> Splines;
+	for (auto* Component : Components)
+	{
+		auto* Data = NewObject<UPCGSplineData>();
+		Data->Initialize(Component);
+		Owned.Emplace(Data);
+		Splines.Add(Data);
+	}
+	return FDeepLevelRoadNetworkPlanner::BuildPlan(*LoadedCatalog, Splines, Grid, 0, OutPlan, OutError, CellOverrides);
 }
 
 bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
@@ -235,40 +271,10 @@ bool ADeepLevelRoadNetworkActor::BuildCityLayoutFragment(
 		return false;
 	}
 
-	UDeepLevelRoadTileCatalog* LoadedCatalog = Catalog.LoadSynchronous();
-	if (!LoadedCatalog)
-	{
-		OutError = NSLOCTEXT("DeepLevelRoadNetwork", "MissingFragmentCatalog", "Road Network requires a Road Tile Catalog.");
-		return false;
-	}
-
-	TArray<UDeepLevelRoadSplineComponent*> SplineComponents;
-	GetRoadSplineComponents(SplineComponents);
 	OutFragment.SourceGuid = LayoutSourceGuid;
 	OutFragment.SourceRevision = LayoutRevision;
-	if (SplineComponents.IsEmpty())
-	{
-		return true;
-	}
-
-	TArray<TObjectPtr<UPCGSplineData>> OwnedSplineData;
-	TArray<const UPCGSplineData*> Splines;
-	OwnedSplineData.Reserve(SplineComponents.Num());
-	Splines.Reserve(SplineComponents.Num());
-	for (UDeepLevelRoadSplineComponent* SplineComponent : SplineComponents)
-	{
-		UPCGSplineData* SplineData = NewObject<UPCGSplineData>();
-		SplineData->Initialize(SplineComponent);
-		OwnedSplineData.Add(SplineData);
-		Splines.Add(SplineData);
-	}
-
 	FDeepLevelRoadNetworkPlan Plan;
-	if (!FDeepLevelRoadNetworkPlanner::BuildPlan(
-		*LoadedCatalog, Splines, Grid, 0, Plan, OutError, CellOverrides))
-	{
-		return false;
-	}
+	if (!BuildRoadPlan(Plan, OutError)) return false;
 
 	OutFragment.Cells.Reserve(Plan.Placements.Num());
 	OutFragment.Anchors.Reserve(Plan.Placements.Num() * 2);
@@ -403,6 +409,8 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 	}
 
 	TArray<UInstancedStaticMeshComponent*> GeneratedISMs;
+	GetRootComponent()->SetMobility(EComponentMobility::Static);
+	GeneratedRoadMeshes->SetMobility(EComponentMobility::Static);
 	PCGComponent->ForEachConstManagedResource([&GeneratedISMs](const UPCGManagedResource* Resource)
 	{
 		const UPCGManagedISMComponent* ManagedISM = Cast<UPCGManagedISMComponent>(Resource);
@@ -420,6 +428,7 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 		}
 
 		ISMComponent->SetCollisionProfileName(RoadMeshCollisionProfile.Name);
+		ISMComponent->SetMobility(EComponentMobility::Static);
 		ISMComponent->SetCastShadow(false);
 
 		if (ISMComponent->GetAttachParent() != GeneratedRoadMeshes)
@@ -429,11 +438,15 @@ void ADeepLevelRoadNetworkActor::OrganizeGeneratedRoadMeshes(UPCGComponent* Gene
 	}
 
 	NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange::GeneratedComponents);
+	if (bSidewalkInfillRegenerationPending)
+	{
+		RegenerateSidewalkInfills();
+	}
 }
 
 void ADeepLevelRoadNetworkActor::NotifyRoadNetworkChanged(const EDeepLevelRoadNetworkChange Change)
 {
-	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents)
+	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && Change != EDeepLevelRoadNetworkChange::Traffic)
 	{
 		++LayoutRevision;
 		SynchronizeCityLayoutRegistration();
@@ -442,7 +455,7 @@ void ADeepLevelRoadNetworkActor::NotifyRoadNetworkChanged(const EDeepLevelRoadNe
 			CityLayout->InvalidateSnapshot();
 		}
 	}
-	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && PCGComponent)
+	if (Change != EDeepLevelRoadNetworkChange::GeneratedComponents && Change != EDeepLevelRoadNetworkChange::Traffic && PCGComponent)
 	{
 		PCGComponent->NotifyPropertiesChangedFromBlueprint();
 
@@ -493,6 +506,14 @@ void ADeepLevelRoadNetworkActor::GenerateInitialRoadNetwork()
 void ADeepLevelRoadNetworkActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+    const FName Property=PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty->GetFName() : PropertyChangedEvent.GetPropertyName();
+    if (Property==GET_MEMBER_NAME_CHECKED(ADeepLevelRoadNetworkActor,bGenerateTrafficLanes)
+        || Property==GET_MEMBER_NAME_CHECKED(ADeepLevelRoadNetworkActor,TwoWayLaneProfile)
+        || Property==GET_MEMBER_NAME_CHECKED(ADeepLevelRoadNetworkActor,WideLaneProfile))
+    {
+        NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange::Traffic);
+        return;
+    }
 	SynchronizeCityLayoutRegistration();
 	SynchronizeTransformToCityLayout();
 	NotifyRoadNetworkChanged();
@@ -512,6 +533,7 @@ void ADeepLevelRoadNetworkActor::PostEditUndo()
 {
 	Super::PostEditUndo();
 	NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange::Structure);
+    NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange::Traffic);
 }
 #endif
 

@@ -1,6 +1,7 @@
 // Copyright <--\, Inc. All Rights Reserved.
 #include "Automation/DeepLevelPCGAutomation.h"
 #include "City/Decoration/Automation/DeepLevelCityDecorationDSL.h"
+#include "City/Automation/DeepLevelCityLayoutDSL.h"
 #include "Road/Automation/DeepLevelRoadDSL.h"
 #include "Building/Automation/DeepLevelBuildingDSL.h"
 #include "Automation/DeepLevelPCGGeneration.h"
@@ -20,7 +21,8 @@ FString DeepLevelPCGAutomation::Describe()
  return TEXT(R"JSON({"version":1,"domains":{"decoration":)JSON") + DeepLevelCityDecorationDSL::Describe()
   + TEXT(R"JSON(,"road":)JSON") + DeepLevelRoadDSL::Describe()
   + TEXT(R"JSON(,"building":)JSON") + DeepLevelBuildingDSL::Describe()
-  + TEXT(R"JSON(},"request":{"version":1,"domain":"decoration|road|building","operations":[],"capture":false,"save":false,"dryRun":false,"includeState":true,"camera":{"location":[0,0,0],"rotation":[0,0,0],"fov":90},"captureSize":[1024,768]},"limits":{"operations":256,"requestCharacters":262144,"imageSide":2048},"semantics":{"authoring":"validate staged edits before one Undo transaction; PCG generation and final alignment are separate phases, not atomically rolled back","generation":"Execute awaits requested PCG completion without blocking the editor; timeoutSeconds 1..300, default 120; cancellation and verification errors are explicit","statuses":"applied/generated/aligned/saved/captured are distinct; inspect lastGenerationError and validation","save":"false by default; selected target package only, including preexisting dirty changes in that package; no SaveAll","capture":"fresh isolated preview or editor-world viewport; no PIE or user camera changes","dryRun":"validate authoring without live edits or generation; catalog staged previews supported"}})JSON");
+  + TEXT(R"JSON(,"city":)JSON") + DeepLevelCityLayoutDSL::Describe()
+  + TEXT(R"JSON(},"request":{"version":1,"domain":"decoration|road|building|city","operations":[],"capture":false,"save":false,"dryRun":false,"includeState":true,"camera":{"location":[0,0,0],"rotation":[0,0,0],"fov":90},"captureSize":[1024,768]},"limits":{"operations":256,"requestCharacters":262144,"imageSide":2048},"semantics":{"authoring":"validate staged edits before one Undo transaction; PCG generation and final alignment are separate phases, not atomically rolled back","generation":"Execute awaits requested PCG completion without blocking the editor; timeoutSeconds 1..300, default 120; cancellation and verification errors are explicit","statuses":"applied/generated/aligned/saved/captured are distinct; inspect lastGenerationError and validation","save":"false by default; selected target package only, including preexisting dirty changes in that package; no SaveAll","capture":"fresh isolated preview or editor-world viewport; no PIE or user camera changes","dryRun":"validate authoring without live edits or generation; catalog staged previews supported"}})JSON");
 }
 
 namespace
@@ -52,6 +54,7 @@ FDeepLevelPCGAutomationResult DeepLevelPCGAutomation::Execute(const FString& Req
  FDeepLevelPCGAutomationResult Out; TSharedPtr<FJsonObject> Root; FString Domain;
  if (!ReadRequest(Request, Root, Domain, Out)) { return Out; }
  if (Domain == TEXT("decoration")) { DeepLevelCityDecorationDSL::Execute(Root.ToSharedRef(), Out); return Out; }
+ if (Domain == TEXT("city")) { DeepLevelCityLayoutDSL::Execute(Root.ToSharedRef(), Out); return Out; }
  FDeepLevelPCGAutomationPlan Plan;
  if (!PrepareDomain(Root.ToSharedRef(), Domain, Plan, Out)) { return Out; }
  if (Plan.bRequiresAsync)
@@ -65,6 +68,8 @@ void DeepLevelPCGAutomation::ExecuteAsync(const FString& Request, TFunction<void
  if (!ReadRequest(Request, Root, Domain, Out)) { Completed(MoveTemp(Out)); return; }
  if (Domain == TEXT("decoration"))
  { DeepLevelCityDecorationDSL::Execute(Root.ToSharedRef(), Out); Completed(MoveTemp(Out)); return; }
+ if (Domain == TEXT("city"))
+ { DeepLevelCityLayoutDSL::Execute(Root.ToSharedRef(), Out); Completed(MoveTemp(Out)); return; }
  FDeepLevelPCGAutomationPlan Plan;
  if (!PrepareDomain(Root.ToSharedRef(), Domain, Plan, Out)) { Completed(MoveTemp(Out)); return; }
  DeepLevelPCGGeneration::Run(MoveTemp(Plan), MoveTemp(Out), MoveTemp(Completed));

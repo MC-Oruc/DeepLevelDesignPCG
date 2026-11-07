@@ -22,6 +22,16 @@
 
 namespace DeepLevelCityDecorationRegenerationTests
 {
+	template<typename T>
+	TArray<T*> Outputs(const ADeepLevelCityLayoutActor* Layout)
+	{
+		TArray<T*> Result;
+		for (UActorComponent* Component : Layout->DecorationComponent->GetGeneratedComponents())
+		{
+			if (T* Output = Cast<T>(Component)) Result.Add(Output);
+		}
+		return Result;
+	}
 	class FWorldScope
 	{
 	public:
@@ -117,9 +127,9 @@ bool FDeepLevelCityDecorationRegenerationTest::RunTest(const FString& Parameters
 	TArray<UHierarchicalInstancedStaticMeshComponent*> Meshes;
 	TArray<UChildActorComponent*> Actors;
 	TArray<UDecalComponent*> Decals;
-	Layout->GetComponents(Meshes);
-	Layout->GetComponents(Actors);
-	Layout->GetComponents(Decals);
+	Meshes = DeepLevelCityDecorationRegenerationTests::Outputs<UHierarchicalInstancedStaticMeshComponent>(Layout);
+	Actors = DeepLevelCityDecorationRegenerationTests::Outputs<UChildActorComponent>(Layout);
+	Decals = DeepLevelCityDecorationRegenerationTests::Outputs<UDecalComponent>(Layout);
 	TestTrue(TEXT("HISM mesh adapter is shared"), Meshes.Num() > 0);
 	TestTrue(TEXT("Actor adapter creates light actors"), Actors.Num() > 0);
 	TestTrue(TEXT("Decal adapter creates decal components"), Decals.Num() > 0);
@@ -136,22 +146,29 @@ bool FDeepLevelCityDecorationRegenerationTest::RunTest(const FString& Parameters
 	{
 		TestTrue(TEXT("Old decoration chunks are cleaned despite unchanged snapshot"), Component->LastDirtyChunks.Contains(Chunk));
 	}
-	TestFalse(TEXT("Old component is removed from owner"), Layout->GetInstanceComponents().Contains(OriginalMesh.Get()));
+	TestFalse(TEXT("Old spatial output is destroyed"), OriginalMesh.IsValid());
 	Category->Entries[0].Mesh.Reset();
 	TestFalse(TEXT("Invalid data is rejected before clearing outputs"), Component->Regenerate(false, Error));
 	Meshes.Reset();
-	Layout->GetComponents(Meshes);
+	Meshes = DeepLevelCityDecorationRegenerationTests::Outputs<UHierarchicalInstancedStaticMeshComponent>(Layout);
 	TestTrue(TEXT("Validation failure preserves materialized meshes"), Meshes.Num() > 0);
 	Layout->DecorationSet->Categories.Reset();
 	TestTrue(TEXT("Removing definitions clears previous chunks"), Component->Regenerate(false, Error));
 	TestEqual(TEXT("No stale outputs remain"), Component->LastPlacementCount, 0);
 	Meshes.Reset(); Actors.Reset(); Decals.Reset();
-	Layout->GetComponents(Meshes);
-	Layout->GetComponents(Actors);
-	Layout->GetComponents(Decals);
+	Meshes = DeepLevelCityDecorationRegenerationTests::Outputs<UHierarchicalInstancedStaticMeshComponent>(Layout);
+	Actors = DeepLevelCityDecorationRegenerationTests::Outputs<UChildActorComponent>(Layout);
+	Decals = DeepLevelCityDecorationRegenerationTests::Outputs<UDecalComponent>(Layout);
 	TestEqual(TEXT("Mesh cleanup removes components"), Meshes.Num(), 0);
 	TestEqual(TEXT("Actor cleanup removes components"), Actors.Num(), 0);
 	TestEqual(TEXT("Decal cleanup removes components"), Decals.Num(), 0);
+	Category->Entries[0].Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	Layout->DecorationSet->Categories.Add(Category);
+	TestTrue(TEXT("Dynamic nonpartitioned output can be generated again"), Component->Regenerate(true, Error));
+	const TArray<AActor*> RuntimeOutput = Component->GetGeneratedActors();
+	World->DestroyActor(Layout);
+	for (AActor* Output : RuntimeOutput)
+		TestTrue(TEXT("Deleting a dynamic runtime owner removes its output actors"), Output->IsActorBeingDestroyed() || !IsValid(Output));
 	return true;
 }
 
@@ -235,13 +252,13 @@ bool FDeepLevelCityFacadeOutputRegenerationTest::RunTest(const FString&)
 			RemovedSideIds.Add(Placement.StableId);
 	}
 	if (!TestEqual(TEXT("One variant initially emits front and side for all output types"), RetainedFrontIds.Num() + RemovedSideIds.Num(), 6)) { return false; }
-	if (!TestEqual(TEXT("Initial mesh instances include front and side"), [&] { TArray<UHierarchicalInstancedStaticMeshComponent*> C; Layout->GetComponents(C); int32 N = 0; for (const auto* X : C) { N += X->GetInstanceCount(); } return N; }(), 2)) { return false; }
+	if (!TestEqual(TEXT("Initial mesh instances include front and side"), [&] { auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UHierarchicalInstancedStaticMeshComponent>(Layout); int32 N = 0; for (const auto* X : C) { N += X->GetInstanceCount(); } return N; }(), 2)) { return false; }
 	{
-		TArray<UChildActorComponent*> C; Layout->GetComponents(C);
+		auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UChildActorComponent>(Layout);
 		if (!TestEqual(TEXT("Initial actor outputs include front and side"), C.Num(), 2)) { return false; }
 	}
 	{
-		TArray<UDecalComponent*> C; Layout->GetComponents(C);
+		auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UDecalComponent>(Layout);
 		if (!TestEqual(TEXT("Initial decals include front and side"), C.Num(), 2)) { return false; }
 	}
 	FDeepLevelCityBuilding& Neighbor = PublishedFragment->Buildings.Emplace_GetRef();
@@ -259,18 +276,19 @@ bool FDeepLevelCityFacadeOutputRegenerationTest::RunTest(const FString&)
 		TestTrue(TEXT("Front placement keeps its stable identity"), After.ContainsByPredicate([&](const auto& P) { return P.StableId == Id && P.VariantId == Variant.VariantGuid; }));
 	TestEqual(TEXT("Target retains its three front placements"), After.FilterByPredicate([&](const auto& P) { return P.BuildingId == TargetId; }).Num(), 3);
 	{
-		TArray<UHierarchicalInstancedStaticMeshComponent*> C; Layout->GetComponents(C); int32 N = 0; for (const auto* X : C) { N += X->GetInstanceCount(); }
+		auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UHierarchicalInstancedStaticMeshComponent>(Layout); int32 N = 0; for (const auto* X : C) { N += X->GetInstanceCount(); }
 		TestEqual(TEXT("Regeneration removes stale side mesh while keeping visible meshes"), N, 3);
 	}
 	{
-		TArray<UChildActorComponent*> C; Layout->GetComponents(C);
+		auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UChildActorComponent>(Layout);
 		TestEqual(TEXT("Regeneration removes stale side actor while keeping visible actors"), C.Num(), 3);
 	}
 	{
-		TArray<UDecalComponent*> C; Layout->GetComponents(C);
+		auto C = DeepLevelCityDecorationRegenerationTests::Outputs<UDecalComponent>(Layout);
 		TestEqual(TEXT("Regeneration removes stale side decal while keeping visible decals"), C.Num(), 3);
 	}
 	return true;
 }
 
 #endif
+

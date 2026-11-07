@@ -5,7 +5,7 @@
 #include "City/Decoration/DeepLevelCityDecorationAuthoring.h"
 #include "City/Decoration/DeepLevelCityDecorationValidation.h"
 #include "Automation/Data/DeepLevelPCGAutomationResult.h"
-#include "Serialization/JsonSerializer.h"
+#include "UObject/UnrealType.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
@@ -20,12 +20,6 @@ namespace
 	namespace Authoring = DeepLevelCityDecorationAuthoring;
 	using FObject = TSharedRef<FJsonObject>;
 
-	FString Json(const FObject& Object)
-	{
-		FString Text;
-		FJsonSerializer::Serialize(Object, TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text));
-		return Text;
-	}
 	bool Fields(const FObject& Object, std::initializer_list<const TCHAR*> Allowed, FString& Error)
 	{
 		for (const auto& Field : Object->Values)
@@ -76,6 +70,26 @@ namespace
 	TArray<TSharedPtr<FJsonValue>> VectorJson(const FVector& V)
 	{
 		return {MakeShared<FJsonValueNumber>(V.X), MakeShared<FJsonValueNumber>(V.Y), MakeShared<FJsonValueNumber>(V.Z)};
+	}
+	bool PatchRendering(const FObject& Op, FDeepLevelCityDecorationRendering& Value, FString& Error)
+	{
+		if (!Op->HasField(TEXT("rendering"))) return true;
+		const TSharedPtr<FJsonObject>* Object = nullptr;
+		if (!Op->TryGetObjectField(TEXT("rendering"), Object) || !Object || !Object->IsValid())
+		{ Error = TEXT("rendering must be an object."); return false; }
+		const FObject Settings = Object->ToSharedRef();
+		double Distance = Value.MaxDrawDistance, Fade = Value.DecalFadeScreenSize;
+		FString Collision = Value.CollisionProfile.ToString();
+		if (!Fields(Settings, {TEXT("maxDrawDistance"),TEXT("castShadow"),TEXT("collisionProfile"),TEXT("affectNavigation"),TEXT("decalFadeScreenSize")}, Error)
+			|| !Number(Settings, TEXT("maxDrawDistance"), Distance, Error) || !Number(Settings, TEXT("decalFadeScreenSize"), Fade, Error)
+			|| !Bool(Settings, TEXT("castShadow"), Value.bCastShadow, Error) || !Bool(Settings, TEXT("affectNavigation"), Value.bAffectNavigation, Error)
+			|| !String(Settings, TEXT("collisionProfile"), Collision, Error, false)) return false;
+		if (Distance < 0 || Distance > MAX_int32 || FMath::FloorToDouble(Distance) != Distance || Fade <= 0 || Fade > 1)
+		{ Error = TEXT("rendering requires a nonnegative integer distance and a decal screen size in (0, 1]."); return false; }
+		Value.MaxDrawDistance = static_cast<int32>(Distance);
+		Value.DecalFadeScreenSize = static_cast<float>(Fade);
+		Value.CollisionProfile = FName(*Collision);
+		return true;
 	}
 	const TCHAR* FaceName(const EDeepLevelBuildingVolumeFace Face)
 	{
@@ -147,15 +161,26 @@ namespace
 			Variant->SetStringField(TEXT("id"), V.VariantGuid.ToString(EGuidFormats::DigitsWithHyphens));
 			Variant->SetStringField(TEXT("name"), V.Name.ToString());
 			Variant->SetNumberField(TEXT("weight"), V.SelectionWeight);
+			Variant->SetStringField(TEXT("group"), V.SelectionGroup.ToString());
 			TArray<TSharedPtr<FJsonValue>> Entries;
 			for (const auto& E : V.Entries)
 			{
 				auto Entry = MakeShared<FJsonObject>();
 				Entry->SetStringField(TEXT("id"), E.EntryGuid.ToString(EGuidFormats::DigitsWithHyphens));
 				Entry->SetStringField(TEXT("name"), E.Name.ToString());
+                Entry->SetBoolField(TEXT("enabled"), E.bEnabled);
+                Entry->SetBoolField(TEXT("windowLighting"), E.bWindowLight);
+                Entry->SetNumberField(TEXT("brightness"), E.WindowIntensity);
 				Entry->SetStringField(TEXT("output"), E.Output == EDeepLevelCityDecorationOutput::Mesh ? TEXT("mesh") : E.Output == EDeepLevelCityDecorationOutput::Actor ? TEXT("actor") : TEXT("decal"));
 				Entry->SetStringField(TEXT("asset"), E.Output == EDeepLevelCityDecorationOutput::Mesh ? E.Mesh.ToString() : E.Output == EDeepLevelCityDecorationOutput::Actor ? E.ActorClass.ToString() : E.DecalMaterial.ToString());
 				Entry->SetArrayField(TEXT("decalSize"), VectorJson(E.DecalSize));
+				auto Rendering = MakeShared<FJsonObject>();
+				Rendering->SetNumberField(TEXT("maxDrawDistance"), E.Rendering.MaxDrawDistance);
+				Rendering->SetBoolField(TEXT("castShadow"), E.Rendering.bCastShadow);
+				Rendering->SetStringField(TEXT("collisionProfile"), E.Rendering.CollisionProfile.ToString());
+				Rendering->SetBoolField(TEXT("affectNavigation"), E.Rendering.bAffectNavigation);
+				Rendering->SetNumberField(TEXT("decalFadeScreenSize"), E.Rendering.DecalFadeScreenSize);
+				Entry->SetObjectField(TEXT("rendering"), Rendering);
 				if (E.bAutoFacade) { Entry->SetStringField(TEXT("facade"), TEXT("auto")); }
 				else
 				{
@@ -194,12 +219,12 @@ namespace
 
 	bool OperationFields(const FObject& Op, const FString& Action, FString& Error)
 	{
-		if (Action == TEXT("variant.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("name"),TEXT("weight")}, Error); }
-		if (Action == TEXT("variant.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("name"),TEXT("weight")}, Error); }
-		if (Action == TEXT("variant.duplicate")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("name"),TEXT("weight")}, Error); }
+		if (Action == TEXT("variant.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("name"),TEXT("weight"),TEXT("group")}, Error); }
+		if (Action == TEXT("variant.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("name"),TEXT("weight"),TEXT("group")}, Error); }
+		if (Action == TEXT("variant.duplicate")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("name"),TEXT("weight"),TEXT("group")}, Error); }
 		if (Action == TEXT("variant.remove")) { return Fields(Op, {TEXT("op"),TEXT("variant")}, Error); }
-		if (Action == TEXT("entry.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade")}, Error); }
-		if (Action == TEXT("entry.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade")}, Error); }
+		if (Action == TEXT("entry.add")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade"),TEXT("rendering")}, Error); }
+		if (Action == TEXT("entry.update")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("asset"),TEXT("name"),TEXT("location"),TEXT("rotation"),TEXT("scale"),TEXT("decalSize"),TEXT("facade"),TEXT("rendering")}, Error); }
 		if (Action == TEXT("entry.duplicate")) { return Fields(Op, {TEXT("op"),TEXT("as"),TEXT("variant"),TEXT("entry")}, Error); }
 		if (Action == TEXT("entry.remove") || Action == TEXT("link.remove")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry")}, Error); }
 		if (Action == TEXT("entry.move")) { return Fields(Op, {TEXT("op"),TEXT("variant"),TEXT("entry"),TEXT("direction")}, Error); }
@@ -289,7 +314,9 @@ namespace
 				{
 					if (Action == TEXT("variant.add")) { Document.AddVariant(); }
 					if (Action == TEXT("variant.duplicate")) { Document.DuplicateVariant(); if (!Op->HasField(TEXT("weight"))) { Weight = Document.GetVariant()->SelectionWeight; } }
-					Document.SetVariantFields(Name.IsEmpty() ? Document.GetVariant()->Name : FName(*Name), Weight);
+					FString Group = Document.GetVariant()->SelectionGroup.ToString();
+                    if (!String(Op, TEXT("group"), Group, Error, false)) { return false; }
+                    Document.SetVariantFields(Name.IsEmpty() ? Document.GetVariant()->Name : FName(*Name), Weight, FName(*Group));
 					Produced = Document.GetVariantId(); bVariant = true;
 				}
 			}
@@ -310,6 +337,7 @@ namespace
 				}
 				if (!Name.IsEmpty()) { Desired.Name = FName(*Name); }
 				if (!PatchTransform(Op, Desired.LocalTransform, Error) || !Vector(Op, TEXT("decalSize"), Desired.DecalSize, Error)) { return false; }
+				if (!PatchRendering(Op, Desired.Rendering, Error)) return false;
 				const bool bHasFacade = Op->HasField(TEXT("facade"));
 				if (bHasFacade && !ParseFacades(Op, Desired, Error)) { return false; }
 				if (!Desired.Validate(Failure)) { Error = Failure.ToString(); return false; }
@@ -369,7 +397,7 @@ namespace
 
 FString DeepLevelCityDecorationDSL::Describe()
 {
-	return TEXT(R"JSON({"scope":"City Decoration Set and its linked building profiles. Profile creation is explicit and limited to the selected catalog building; no level generation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links. If the building has no profile, provide profile as an exact long package path under the set's Buildings folder. Existing profile package is reusable only when its class is null and variants are empty. dryRun creates no persistent assets.","rootFields":["version","domain","set","building?","profile?","variant?","operations","capture?","save?","dryRun?","includeState?","camera?","captureSize?"],"operations":[{"op":"variant.add","fields":["name?","weight?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","facade?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?","facade?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"facade":"'auto' chooses the nearest geometric face. An explicit nonempty array such as ['PositiveX','NegativeY'] uses OR visibility. Forbidden faces are filtered by building visibility.","vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","profile":"/Game/Example/Buildings/DA_Building_Decoration","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"facade":"auto","as":"lamp"}],"variant":"$v","save":true}})JSON");
+	return TEXT(R"JSON({"scope":"City Decoration Set and its linked building profiles. Profile creation is explicit and limited to the selected catalog building; no level generation or arbitrary property/function calls.","context":"set required; building required for edits/capture. Empty operations inspects catalog; provide building to inspect variants/entries/links. If the building has no profile, provide profile as an exact long package path under the set's Buildings folder. Existing profile package is reusable only when its class is null and variants are empty. dryRun creates no persistent assets.","rootFields":["version","domain","set","building?","profile?","variant?","operations","capture?","save?","dryRun?","includeState?","camera?","captureSize?"],"operations":[{"op":"variant.add","fields":["name?","weight?","group?","as?"]},{"op":"variant.update","fields":["variant","name?","weight?","group?"]},{"op":"variant.duplicate","fields":["variant","name?","weight?","group?","as?"]},{"op":"variant.remove","fields":["variant"]},{"op":"entry.add","fields":["variant","asset","name?","location?","rotation?","scale?","decalSize?","facade?","rendering?","as?"]},{"op":"entry.update","fields":["variant","entry","asset?","name?","location?","rotation?","scale?","decalSize?","facade?","rendering?"]},{"op":"entry.duplicate","fields":["variant","entry","as?"]},{"op":"entry.remove","fields":["variant","entry"]},{"op":"entry.move","fields":["variant","entry","direction=-1|1"]},{"op":"link.create","fields":["variant","entry","axis=X|Y|Z","target?","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?","as?"]},{"op":"link.update","fields":["variant","entry","syncLocation?","syncRotation?","syncScale?","mirrorGeometry?","rotationMode=mirror|copy?","locationOffset?","rotationOffset?","scaleMultiplier?"]},{"op":"link.remove","fields":["variant","entry"]}],"groups":"Choose one weighted variant independently per group. None is the preserved base arrangement; an empty variant can represent an optional layer being absent.","facade":"'auto' chooses the nearest geometric face. An explicit nonempty array such as ['PositiveX','NegativeY'] uses OR visibility. Forbidden faces are filtered by building visibility.","vectors":"[x,y,z], positions cm; rotations [pitch,yaw,roll] degrees; scales/multipliers dimensionless","captureVariant":"root variant GUID/$alias or explicitly selected variant of the last operation; no guessed arrangement","linkOffsets":"First/source to Second/target, same semantics as Details; existing targets keep placements when offsets are omitted","example":{"version":1,"domain":"decoration","set":"/Game/Example/DA_Set.DA_Set","building":"/Game/Example/BP_Building.BP_Building_C","profile":"/Game/Example/Buildings/DA_Building_Decoration","operations":[{"op":"variant.add","name":"Facade","as":"v"},{"op":"entry.add","variant":"$v","asset":"/Engine/BasicShapes/Cube.Cube","location":[100,200,300],"facade":"auto","as":"lamp"}],"variant":"$v","save":true}})JSON");
 }
 
 void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAutomationResult& Out)
@@ -494,7 +522,10 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 		{ Fail(Batch.Error.IsEmpty() ? TEXT("Capture variant not found.") : Batch.Error); return; }
 	}
 	if (bCapture && !Authoring::FindVariant(*Stage, CaptureVariant)) { Fail(TEXT("Capture requires an explicit variant or a variant selected by an operation.")); return; }
-	const bool bChanged = bCreatingProfile || Json(State(*Original)) != Json(State(*Stage));
+	const auto* VariantsProperty = FindFProperty<FArrayProperty>(
+		UDeepLevelCityBuildingDecorationProfile::StaticClass(), GET_MEMBER_NAME_CHECKED(UDeepLevelCityBuildingDecorationProfile, Variants));
+	check(VariantsProperty);
+	const bool bChanged = bCreatingProfile || !VariantsProperty->Identical_InContainer(Original, Stage.Get());
 	UDeepLevelCityBuildingDecorationProfile* AppliedProfile = Original;
 	if (!bDryRun && bCreatingProfile)
 	{
@@ -539,3 +570,4 @@ void DeepLevelCityDecorationDSL::Execute(const FObject& Request, FDeepLevelPCGAu
 	}
 	if (bCapture) { DeepLevelCityDecorationCapture::Capture(bDryRun ? *Stage : *AppliedProfile, CaptureVariant, CaptureOptions, Out); }
 }
+

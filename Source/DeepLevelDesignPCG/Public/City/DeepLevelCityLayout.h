@@ -30,6 +30,7 @@ namespace DeepLevelCityTags
 
 class UDeepLevelCityDecorationSet;
 class UDeepLevelCityDecorationComponent;
+class UHLODLayer;
 
 UENUM(BlueprintType)
 enum class EDeepLevelCityDecorationOverrideMode : uint8
@@ -111,8 +112,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Decoration")
 	TObjectPtr<UDeepLevelCityDecorationSet> DecorationSet;
 
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditAnywhere, Category = "Deep Level Design PCG|Decoration")
+	TObjectPtr<UHLODLayer> DecorationHLODLayer;
+#endif
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Deep Level Design PCG|Decoration")
 	int32 DecorationSeed = 1337;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Deep Level Design PCG|Building Visibility",meta=(ClampMin="0",Units="cm"))
+	double FacadeSeamTolerance = DeepLevelBuildingFacades::DefaultSeamTolerance;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Deep Level Design PCG|Decoration", meta = (TitleProperty = "Mode"))
 	TArray<FDeepLevelCityDecorationOverride> DecorationOverrides;
@@ -297,7 +306,8 @@ public:
 		const FDeepLevelCityGrid& Grid,
 		TConstArrayView<FDeepLevelCityLayoutFragment> Fragments,
 		TSharedPtr<const FDeepLevelCityLayoutSnapshot>& OutSnapshot,
-		FText& OutError);
+		FText& OutError,
+		double FacadeSeamTolerance = DeepLevelBuildingFacades::DefaultSeamTolerance);
 
 	static void FindDirtyChunks(
 		const FDeepLevelCityLayoutSnapshot* Previous,

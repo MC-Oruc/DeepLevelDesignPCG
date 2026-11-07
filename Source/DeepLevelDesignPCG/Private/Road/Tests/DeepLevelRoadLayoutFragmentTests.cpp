@@ -169,6 +169,17 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 	MeshEntry.Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
 	MeshEntry.RequiredAnchorTags.AddTag(DeepLevelCityTags::Anchor_Sidewalk_Surface);
 	MeshEntry.PlacementSlot = TEXT("Mesh");
+	MeshEntry.Rendering.MaxDrawDistance = 5000;
+	MeshEntry.Rendering.CollisionProfile = TEXT("NoCollision");
+	MeshEntry.Rendering.bCastShadow = false;
+	MeshEntry.Rendering.bAffectNavigation = false;
+	FDeepLevelCityDecorationEntry SolidEntry = MeshEntry;
+	SolidEntry.EntryGuid = FGuid(10, 20, 30, 4);
+	SolidEntry.PlacementSlot = TEXT("SolidMesh");
+	SolidEntry.Rendering.MaxDrawDistance = 8000;
+	SolidEntry.Rendering.CollisionProfile = TEXT("BlockAll");
+	SolidEntry.Rendering.bCastShadow = true;
+	Category->Entries.Add(SolidEntry);
 	FDeepLevelCityDecorationEntry& ActorEntry = Category->Entries.Emplace_GetRef();
 	ActorEntry.EntryGuid = FGuid(10, 20, 30, 2);
 	ActorEntry.Output = EDeepLevelCityDecorationOutput::Actor;
@@ -191,12 +202,20 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 	if (!TestTrue(FString::Printf(TEXT("City decoration materializes all output adapters: %s"), *Error.ToString()), bGenerated)) { return false; }
 	TestTrue(TEXT("Materializer exposes placement diagnostics"), CityLayout->DecorationComponent->LastPlacementCount > 0);
 	TestTrue(TEXT("Materializer exposes regenerated chunks"), !CityLayout->DecorationComponent->LastDirtyChunks.IsEmpty());
-	TInlineComponentArray<UHierarchicalInstancedStaticMeshComponent*> HISMs(CityLayout);
-	TInlineComponentArray<UDecalComponent*> Decals(CityLayout);
+	TArray<UHierarchicalInstancedStaticMeshComponent*> HISMs;
+	TArray<UDecalComponent*> Decals;
+	TArray<UChildActorComponent*> ChildActors;
+	for (UActorComponent* Component : CityLayout->DecorationComponent->GetGeneratedComponents())
+	{
+		if (auto* Mesh = Cast<UHierarchicalInstancedStaticMeshComponent>(Component)) HISMs.Add(Mesh);
+		if (auto* Decal = Cast<UDecalComponent>(Component)) Decals.Add(Decal);
+		if (auto* Child = Cast<UChildActorComponent>(Component)) ChildActors.Add(Child);
+		TestTrue(TEXT("Output has an independent spatial owner"), Component->GetOwner() != CityLayout);
+		TestNull(TEXT("Output actor is not attached across streaming cells"), Component->GetOwner()->GetAttachParentActor());
+	}
 	TestTrue(TEXT("Mesh output uses chunk-owned HISM components"), HISMs.ContainsByPredicate(
 		[](const UHierarchicalInstancedStaticMeshComponent* HISM) { return HISM && HISM->GetInstanceCount() > 0; }));
 	TestTrue(TEXT("Decal output creates chunk-owned decal components"), !Decals.IsEmpty());
-	TInlineComponentArray<UChildActorComponent*> ChildActors(CityLayout);
 	TestTrue(TEXT("Actor output creates a persistent City Layout-owned child actor component"), ChildActors.ContainsByPredicate(
 		[](const UChildActorComponent* Component) { return Component && Component->GetChildActor(); }));
 	TestTrue(TEXT("Generated HISM output is serializable"), HISMs.ContainsByPredicate(
@@ -209,9 +228,19 @@ bool FDeepLevelRoadLayoutFragmentTest::RunTest(const FString& Parameters)
 		{
 			return Decal && !Decal->HasAnyFlags(RF_Transient) && Decal->CreationMethod == EComponentCreationMethod::Instance;
 		}));
-	const int32 InstanceComponentCount = CityLayout->GetInstanceComponents().Num();
+	TestTrue(TEXT("Same mesh keeps distinct collision and draw-distance policies"), HISMs.ContainsByPredicate(
+		[](const UHierarchicalInstancedStaticMeshComponent* Mesh)
+		{
+			return Mesh->GetCollisionProfileName() == TEXT("NoCollision") && Mesh->InstanceEndCullDistance == 5000 && !Mesh->CastShadow;
+		}) && HISMs.ContainsByPredicate([](const UHierarchicalInstancedStaticMeshComponent* Mesh)
+		{
+			return Mesh->GetCollisionProfileName() == TEXT("BlockAll") && Mesh->InstanceEndCullDistance == 8000 && Mesh->CastShadow;
+		}));
+	const int32 InstanceComponentCount = CityLayout->DecorationComponent->GetGeneratedComponents().Num();
+	const TArray<AActor*> PreviousActors = CityLayout->DecorationComponent->GetGeneratedActors();
 	TestTrue(TEXT("Regeneration replaces saved outputs without duplication"), CityLayout->DecorationComponent->Regenerate(true, Error));
-	TestEqual(TEXT("Regeneration preserves the generated component count"), CityLayout->GetInstanceComponents().Num(), InstanceComponentCount);
+	TestEqual(TEXT("Regeneration preserves the generated component count"), CityLayout->DecorationComponent->GetGeneratedComponents().Num(), InstanceComponentCount);
+	for (AActor* Previous : PreviousActors) TestTrue(TEXT("Replaced spatial outputs are destroyed"), Previous->IsActorBeingDestroyed() || !IsValid(Previous));
 	Spline->SetRoadPathFromWorldPoints({FVector(100.0, 200.0, 300.0), FVector(5100.0, 200.0, 300.0), FVector(5100.0, 5200.0, 300.0)});
 	FDeepLevelCityLayoutFragment Bend;
 	TestTrue(TEXT("Single-width L-shaped road fragment builds"), Network->BuildCityLayoutFragment(Grid, Bend, Error));

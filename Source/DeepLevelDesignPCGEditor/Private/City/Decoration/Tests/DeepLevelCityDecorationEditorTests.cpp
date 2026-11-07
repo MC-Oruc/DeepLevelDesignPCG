@@ -23,6 +23,12 @@
 #include "UObject/Package.h"
 #include "Editor.h"
 #include "IDetailsView.h"
+#include "City/Decoration/DeepLevelCityStreetDecorationPanel.h"
+#include "City/Decoration/DeepLevelCityStreetMap.h"
+#include "City/Decoration/DeepLevelCityStreetViewport.h"
+#include "Road/DeepLevelRoadPCG.h"
+#include "ScopedTransaction.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Engine/Blueprint.h"
 #include "Engine/PointLight.h"
 #include "Engine/StaticMesh.h"
@@ -30,6 +36,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Commands/GenericCommands.h"
 #include "Misc/AutomationTest.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Misc/ScopeExit.h"
 #include "Settings/LevelEditorViewportSettings.h"
 #include "UObject/StrongObjectPtr.h"
@@ -444,7 +451,7 @@ bool FDeepLevelCityDecorationPreviewSynchronizationTest::RunTest(const FString&)
 	TestTrue(TEXT("Construction sees the preview flag before executing"), BuildingActor->bPreviewAtConstruction);
 	AActor* Original = Preview->GetEntryActor(Entry);
 	if (!TestNotNull(TEXT("Decoration preview exists"), Original)) { return false; }
-	Fixture.Document.SetVariantFields(TEXT("Renamed"), 2);
+	Fixture.Document.SetVariantFields(TEXT("Renamed"), 2, NAME_None);
 	Preview->Synchronize(Building, Fixture.Profile.Get(), Variant);
 	TestTrue(TEXT("Metadata changes preserve the output actor"), Preview->GetEntryActor(Entry) == Original);
 	FText Error;
@@ -563,40 +570,40 @@ bool FDeepLevelCityDecorationToolkitIntegrationTest::RunTest(const FString&)
 	TestEqual(TEXT("Set workspace keeps its opened asset title"), Toolkit->GetToolkitName().ToString(), Fixture.Set->GetName());
 	TestTrue(TEXT("Set workspace tooltip includes its editable profile"), Toolkit->GetToolkitToolTipText().ToString().Contains(Fixture.Profile->GetName()));
 	const FGuid Entry = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FVector DropLocation(100, 200, 300);
 	const TArray<FAssetData> DroppedAssets{ FAssetData(Fixture.Profile->Variants[0].Entries[0].Mesh.LoadSynchronous()) };
-	TestTrue(TEXT("Dropped assets are added through the toolkit document"), Toolkit->AddDroppedAssets(DroppedAssets, DropLocation, FVector::UpVector));
-	TestTrue(TEXT("Drop selects the newly created decoration"), Toolkit->GetSelectedEntryId().IsValid() && Toolkit->GetSelectedEntryId() != Entry);
-	if (const auto* Dropped = Toolkit->GetSelectedEntry())
+	TestTrue(TEXT("Dropped assets are added through the toolkit document"), Toolkit->Buildings->AddDroppedAssets(DroppedAssets, DropLocation, FVector::UpVector));
+	TestTrue(TEXT("Drop selects the newly created decoration"), Toolkit->Buildings->GetSelectedEntryId().IsValid() && Toolkit->Buildings->GetSelectedEntryId() != Entry);
+	if (const auto* Dropped = Toolkit->Buildings->GetSelectedEntry())
 	{
 		TestEqual(TEXT("Dropped decoration uses its building surface location"), Dropped->LocalTransform.GetLocation(), DropLocation);
-		TestTrue(TEXT("Dropped decoration is materialized in the preview"), Toolkit->Preview->GetEntryActor(Dropped->EntryGuid) != nullptr);
+		TestTrue(TEXT("Dropped decoration is materialized in the preview"), Toolkit->Buildings->Preview->GetEntryActor(Dropped->EntryGuid) != nullptr);
 	}
 	else { AddError(TEXT("Dropped decoration was not selected")); }
-	Toolkit->SelectEntry(Entry);
-	TestTrue(TEXT("Selection uses exactly one entry inspector"), Toolkit->Inspector->GetSelectedObjects().Num() == 1
-		&& Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->EntryProxy.Get());
-	const auto Preview = Toolkit->Preview;
+	Toolkit->Buildings->SelectEntry(Entry);
+	TestTrue(TEXT("Selection uses exactly one entry inspector"), Toolkit->Buildings->Inspector->GetSelectedObjects().Num() == 1
+		&& Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->EntryProxy.Get());
+	const auto Preview = Toolkit->Buildings->Preview;
 	AActor* Original = Preview->GetEntryActor(Entry);
-	Toolkit->EntryProxy->Entry.Name = TEXT("InspectorRename");
+	Toolkit->Buildings->EntryProxy->Entry.Name = TEXT("InspectorRename");
 	FPropertyChangedEvent Event(FindFProperty<FProperty>(UDeepLevelCityDecorationEntryProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationEntryProxy, Entry)));
-	Toolkit->CommitInspector(Event);
-	TestEqual(TEXT("Actual inspector commit goes through the document"), Toolkit->Document->GetEntry()->Name, FName(TEXT("InspectorRename")));
+	Toolkit->Buildings->CommitInspector(Event);
+	TestEqual(TEXT("Actual inspector commit goes through the document"), Toolkit->Buildings->Document->GetEntry()->Name, FName(TEXT("InspectorRename")));
 	TestTrue(TEXT("Inspector metadata edits preserve preview actors"), Preview->GetEntryActor(Entry) == Original);
-	Toolkit->Document->Undo();
-	TestEqual(TEXT("Undo synchronizes the inspector proxy"), Toolkit->EntryProxy->Entry.Name, FName(TEXT("Cube")));
-	TestEqual(TEXT("Undo preserves the selected decoration"), Toolkit->GetSelectedEntryId(), Entry);
-	Toolkit->OutlineClicked(Toolkit->OutlineItems[0]);
+	Toolkit->Buildings->Document->Undo();
+	TestEqual(TEXT("Undo synchronizes the inspector proxy"), Toolkit->Buildings->EntryProxy->Entry.Name, FName(TEXT("Cube")));
+	TestEqual(TEXT("Undo preserves the selected decoration"), Toolkit->Buildings->GetSelectedEntryId(), Entry);
+	Toolkit->Buildings->OutlineClicked(Toolkit->Buildings->OutlineItems[0]);
 	TestNull(TEXT("Selecting the building clears the variant decoration preview"), Preview->GetEntryActor(Entry));
 	TestTrue(TEXT("Building row exposes catalog calibration through the single inspector"),
-		Toolkit->Inspector->GetSelectedObjects().Num() == 1 && Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->BuildingProxy.Get());
-	Toolkit->OutlineClicked(Toolkit->OutlineItems[0]->Children[0]);
-	TestTrue(TEXT("Variant row exposes only variant settings"), Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->VariantProxy.Get());
-	Toolkit->OutlineClicked(Toolkit->OutlineItems[0]->Children[0]->Children[0]);
-	Toolkit->ShowSetSettings();
-	Toolkit->OutlineClicked(Toolkit->OutlineItems[0]->Children[0]->Children[0]);
-	TestTrue(TEXT("Clicking an existing selection restores its own inspector"), Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->EntryProxy.Get());
+		Toolkit->Buildings->Inspector->GetSelectedObjects().Num() == 1 && Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->BuildingProxy.Get());
+	Toolkit->Buildings->OutlineClicked(Toolkit->Buildings->OutlineItems[0]->Children[0]);
+	TestTrue(TEXT("Variant row exposes only variant settings"), Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->VariantProxy.Get());
+	Toolkit->Buildings->OutlineClicked(Toolkit->Buildings->OutlineItems[0]->Children[0]->Children[0]);
+	Toolkit->Buildings->ShowSetSettings();
+	Toolkit->Buildings->OutlineClicked(Toolkit->Buildings->OutlineItems[0]->Children[0]->Children[0]);
+	TestTrue(TEXT("Clicking an existing selection restores its own inspector"), Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->EntryProxy.Get());
 	FHitResult SurfaceHit;
 	TestFalse(TEXT("The selected decoration cannot hit its own surface"),
 		Preview->TraceSurface(FVector(0, 0, 500), FVector(0, 0, -500), SurfaceHit));
@@ -604,14 +611,14 @@ bool FDeepLevelCityDecorationToolkitIntegrationTest::RunTest(const FString&)
 		Preview->TraceSurface(FVector(100, 200, 600), FVector(100, 200, 0), SurfaceHit));
 	TestEqual(TEXT("Decoration target uses render triangles"), SurfaceHit.ImpactPoint.Z, 350.0);
 	TGuardValue<float> SurfaceOffset(GetMutableDefault<ULevelEditorViewportSettings>()->SnapToSurface.SnapOffsetExtent, 0.f);
-	Toolkit->PlaceSelectedOnSurface(FVector::ZeroVector, FVector::UpVector);
-	TestTrue(TEXT("Selected cube is flush above the target plane"), FMath::IsNearlyEqual(Toolkit->GetSelectedEntry()->LocalTransform.GetLocation().Z, 50.0));
+	Toolkit->Buildings->PlaceSelectedOnSurface(FVector::ZeroVector, FVector::UpVector);
+	TestTrue(TEXT("Selected cube is flush above the target plane"), FMath::IsNearlyEqual(Toolkit->Buildings->GetSelectedEntry()->LocalTransform.GetLocation().Z, 50.0));
 	TestEqual(TEXT("Surface placement preserves preview actor and synchronizes position"),
-		Preview->GetEntryActor(Entry)->GetActorLocation(), Toolkit->GetSelectedEntry()->LocalTransform.GetLocation());
-	Toolkit->Document->Undo();
+		Preview->GetEntryActor(Entry)->GetActorLocation(), Toolkit->Buildings->GetSelectedEntry()->LocalTransform.GetLocation());
+	Toolkit->Buildings->Document->Undo();
 	const TSharedRef<int32> Notifications = MakeShared<int32>(0);
-	Toolkit->Document->OnChanged.AddLambda([Notifications](EDeepLevelCityDecorationChange, FGuid) { ++*Notifications; });
-	Toolkit->ApplyWidgetDelta(FVector(20, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->Buildings->Document->OnChanged.AddLambda([Notifications](EDeepLevelCityDecorationChange, FGuid) { ++*Notifications; });
+	Toolkit->Buildings->ApplyWidgetDelta(FVector(20, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
 	const int32 BeforeClose = *Notifications;
 	const TWeakObjectPtr<AActor> ActorBeforeClose = Preview->GetEntryActor(Entry);
 	TestTrue(TEXT("The reselected variant has a valid preview actor before closing"), ActorBeforeClose.IsValid());
@@ -635,7 +642,7 @@ bool FDeepLevelCityDecorationSetSelectionTest::RunTest(const FString&)
 		static_cast<UObject*>(Other.Set.Get()), static_cast<UObject*>(Other.Profile.Get()) }) { Asset->SetFlags(RF_Transient); }
 	TSharedPtr<FDeepLevelCityBuildingDecorationEditor> Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	TestTrue(TEXT("The workspace opens from an explicit City Set"), Toolkit->Document->GetSet() == Fixture.Set.Get());
+	TestTrue(TEXT("The workspace opens from an explicit City Set"), Toolkit->Buildings->Document->GetSet() == Fixture.Set.Get());
 	TestEqual(TEXT("Set entry registers its editable profile for saving"), Toolkit->GetEditingObjects().Num(), 2);
 	TestTrue(TEXT("Only the opened set restores the workspace on restart"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Set.Get()));
 	TestFalse(TEXT("Profiles in the save scope do not restore as separate editors"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Profile.Get()));
@@ -645,9 +652,9 @@ bool FDeepLevelCityDecorationSetSelectionTest::RunTest(const FString&)
 	TestTrue(TEXT("Workspace tooltip includes the opened set"), Toolkit->GetToolkitToolTipText().ToString().Contains(Title));
 
 	Toolkit->ChooseSet(FAssetData(Fixture.Set.Get()));
-	TestTrue(TEXT("Picker selects the explicit set"), Toolkit->Document->GetSet() == Fixture.Set.Get());
-	TestTrue(TEXT("Picker resolves the matching catalog profile"), Toolkit->Document->GetProfile() == Fixture.Profile.Get());
-	TestTrue(TEXT("Picker enables valid authoring"), Toolkit->Document->CanEdit());
+	TestTrue(TEXT("Picker selects the explicit set"), Toolkit->Buildings->Document->GetSet() == Fixture.Set.Get());
+	TestTrue(TEXT("Picker resolves the matching catalog profile"), Toolkit->Buildings->Document->GetProfile() == Fixture.Profile.Get());
+	TestTrue(TEXT("Picker enables valid authoring"), Toolkit->Buildings->Document->CanEdit());
 	TestEqual(TEXT("Set and profile are both registered for editing"), Toolkit->GetEditingObjects().Num(), 2);
 	TestEqual(TEXT("Multi-asset title retains the opened set identity"), Toolkit->GetToolkitName().ToString(), Title);
 	const FString ToolTip = Toolkit->GetToolkitToolTipText().ToString();
@@ -656,14 +663,14 @@ bool FDeepLevelCityDecorationSetSelectionTest::RunTest(const FString&)
 	TestEqual(TEXT("Repeated selection does not duplicate save registrations"), Toolkit->GetEditingObjects().Num(), 2);
 
 	Toolkit->ChooseSet(FAssetData(Other.Set.Get()));
-	TestTrue(TEXT("Changing set resolves its own profile"), Toolkit->Document->GetProfile() == Other.Profile.Get());
+	TestTrue(TEXT("Changing set resolves its own profile"), Toolkit->Buildings->Document->GetProfile() == Other.Profile.Get());
 	TestEqual(TEXT("Previously edited assets remain in the save scope"), Toolkit->GetEditingObjects().Num(), 4);
 	TestFalse(TEXT("A set visited through the picker does not restore a second workspace"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Other.Set.Get()));
 	TestFalse(TEXT("A visited profile does not restore a separate editor"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Other.Profile.Get()));
 	TestEqual(TEXT("Context changes preserve the workspace identity"), Toolkit->GetToolkitName().ToString(), Title);
 	TestTrue(TEXT("Tooltip includes the new context"), Toolkit->GetToolkitToolTipText().ToString().Contains(Other.Set->GetName()));
 	Toolkit->ChooseSet(FAssetData());
-	TestNull(TEXT("Clearing the picker removes set context"), Toolkit->Document->GetSet());
+	TestNull(TEXT("Clearing the picker removes set context"), Toolkit->Buildings->Document->GetSet());
 	TestEqual(TEXT("Clearing the picker preserves registered edited assets"), Toolkit->GetEditingObjects().Num(), 4);
 	TestTrue(TEXT("Clearing context retains the original workspace restore identity"), Toolkit->IncludeAssetInRestoreOpenAssetsPrompt(Fixture.Set.Get()));
 	TestEqual(TEXT("Title remains valid with a cleared picker"), Toolkit->GetToolkitName().ToString(), Title);
@@ -706,47 +713,47 @@ bool FDeepLevelCityDecorationOutlineTest::RunTest(const FString&)
 	FDecorationFixture Fixture;
 	Fixture.Set->SetFlags(RF_Transient);
 	Fixture.Profile->SetFlags(RF_Transient);
-	Fixture.Document.SetVariantFields(TEXT("Facade"), 1);
+	Fixture.Document.SetVariantFields(TEXT("Facade"), 1, NAME_None);
 	TSharedPtr<FDeepLevelCityBuildingDecorationEditor> Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	if (!TestEqual(TEXT("Outline roots come exclusively from the building catalog"), Toolkit->OutlineItems.Num(), 2)) { return false; }
-	const auto Building = Toolkit->OutlineItems[0];
+	if (!TestEqual(TEXT("Outline roots come exclusively from the building catalog"), Toolkit->Buildings->OutlineItems.Num(), 2)) { return false; }
+	const auto Building = Toolkit->Buildings->OutlineItems[0];
 	if (!TestEqual(TEXT("The linked building exposes its variants"), Building->Children.Num(), 1)) { return false; }
 	const auto Variant = Building->Children[0];
 	if (!TestEqual(TEXT("Variant exposes decoration children"), Variant->Children.Num(), 1)) { return false; }
 	const auto Entry = Variant->Children[0];
-	TestTrue(TEXT("A building without a profile has no fabricated children"), Toolkit->OutlineItems[1]->Children.IsEmpty());
-	Toolkit->OutlineClicked(Entry);
-	TestEqual(TEXT("One nested click selects the variant"), Toolkit->Document->GetVariantId(), Variant->Variant);
-	TestEqual(TEXT("One nested click selects the decoration"), Toolkit->GetSelectedEntryId(), Entry->Entry);
-	const auto CurrentBuilding = Toolkit->OutlineItems[0];
+	TestTrue(TEXT("A building without a profile has no fabricated children"), Toolkit->Buildings->OutlineItems[1]->Children.IsEmpty());
+	Toolkit->Buildings->OutlineClicked(Entry);
+	TestEqual(TEXT("One nested click selects the variant"), Toolkit->Buildings->Document->GetVariantId(), Variant->Variant);
+	TestEqual(TEXT("One nested click selects the decoration"), Toolkit->Buildings->GetSelectedEntryId(), Entry->Entry);
+	const auto CurrentBuilding = Toolkit->Buildings->OutlineItems[0];
 	const auto CurrentVariant = CurrentBuilding->Children[0];
-	TestTrue(TEXT("Preview selection is reflected in the native tree"), Toolkit->Outline->IsItemSelected(CurrentVariant->Children[0]));
-	TestTrue(TEXT("Selection expands both ancestors"), Toolkit->Outline->IsItemExpanded(CurrentBuilding) && Toolkit->Outline->IsItemExpanded(CurrentVariant));
-	Toolkit->SearchChanged(FText::FromString(TEXT("Cube")));
-	TestEqual(TEXT("Child search retains its building ancestor"), Toolkit->OutlineItems.Num(), 1);
-	TestEqual(TEXT("Child search retains its variant ancestor"), Toolkit->OutlineItems[0]->Children.Num(), 1);
-	TestEqual(TEXT("Filtering never changes document selection"), Toolkit->GetSelectedEntryId(), Entry->Entry);
-	Toolkit->SearchChanged(FText::FromString(TEXT("Facade")));
-	TestTrue(TEXT("A matching variant retains its decorations"), Toolkit->OutlineItems[0]->Children[0]->Children.Num() == 1);
-	Toolkit->SearchChanged(FText::FromString(TEXT("APackedLevelActor")));
-	TestEqual(TEXT("Filtering out the selected item does not select a substitute parent"), Toolkit->Outline->GetSelectedItems().Num(), 0);
-	Toolkit->SearchChanged(FText::FromString(TEXT("NoSuchDecoration")));
-	TestTrue(TEXT("A miss has no invented rows"), Toolkit->OutlineItems.IsEmpty());
-	TestEqual(TEXT("A miss preserves the actual selected entry"), Toolkit->GetSelectedEntryId(), Entry->Entry);
-	Toolkit->SearchChanged(FText::GetEmpty());
-	TestEqual(TEXT("Clearing search restores catalog roots"), Toolkit->OutlineItems.Num(), 2);
-	TestTrue(TEXT("Expansion survives a filter rebuild"), Toolkit->Outline->IsItemExpanded(Toolkit->OutlineItems[0]));
-	Toolkit->OutlineClicked(Toolkit->OutlineItems[0]->Children[0]);
-	TestFalse(TEXT("Variant selection clears decoration selection"), Toolkit->GetSelectedEntryId().IsValid());
-	Toolkit->Preview->GetCommandList()->ExecuteAction(FGenericCommands::Get().Duplicate.ToSharedRef());
+	TestTrue(TEXT("Preview selection is reflected in the native tree"), Toolkit->Buildings->Outline->IsItemSelected(CurrentVariant->Children[0]));
+	TestTrue(TEXT("Selection expands both ancestors"), Toolkit->Buildings->Outline->IsItemExpanded(CurrentBuilding) && Toolkit->Buildings->Outline->IsItemExpanded(CurrentVariant));
+	Toolkit->Buildings->SearchChanged(FText::FromString(TEXT("Cube")));
+	TestEqual(TEXT("Child search retains its building ancestor"), Toolkit->Buildings->OutlineItems.Num(), 1);
+	TestEqual(TEXT("Child search retains its variant ancestor"), Toolkit->Buildings->OutlineItems[0]->Children.Num(), 1);
+	TestEqual(TEXT("Filtering never changes document selection"), Toolkit->Buildings->GetSelectedEntryId(), Entry->Entry);
+	Toolkit->Buildings->SearchChanged(FText::FromString(TEXT("Facade")));
+	TestTrue(TEXT("A matching variant retains its decorations"), Toolkit->Buildings->OutlineItems[0]->Children[0]->Children.Num() == 1);
+	Toolkit->Buildings->SearchChanged(FText::FromString(TEXT("APackedLevelActor")));
+	TestEqual(TEXT("Filtering out the selected item does not select a substitute parent"), Toolkit->Buildings->Outline->GetSelectedItems().Num(), 0);
+	Toolkit->Buildings->SearchChanged(FText::FromString(TEXT("NoSuchDecoration")));
+	TestTrue(TEXT("A miss has no invented rows"), Toolkit->Buildings->OutlineItems.IsEmpty());
+	TestEqual(TEXT("A miss preserves the actual selected entry"), Toolkit->Buildings->GetSelectedEntryId(), Entry->Entry);
+	Toolkit->Buildings->SearchChanged(FText::GetEmpty());
+	TestEqual(TEXT("Clearing search restores catalog roots"), Toolkit->Buildings->OutlineItems.Num(), 2);
+	TestTrue(TEXT("Expansion survives a filter rebuild"), Toolkit->Buildings->Outline->IsItemExpanded(Toolkit->Buildings->OutlineItems[0]));
+	Toolkit->Buildings->OutlineClicked(Toolkit->Buildings->OutlineItems[0]->Children[0]);
+	TestFalse(TEXT("Variant selection clears decoration selection"), Toolkit->Buildings->GetSelectedEntryId().IsValid());
+	Toolkit->Buildings->Preview->GetCommandList()->ExecuteAction(FGenericCommands::Get().Duplicate.ToSharedRef());
 	TestEqual(TEXT("Native duplicate command duplicates a selected variant"), Fixture.Profile->Variants.Num(), 2);
-	Toolkit->Document->Undo();
+	Toolkit->Buildings->Document->Undo();
 	TestEqual(TEXT("Variant command is one undoable document edit"), Fixture.Profile->Variants.Num(), 1);
 	Fixture.Set->BuildingProfiles.Add(Fixture.Profile.Get());
-	Toolkit->Document->Open(Fixture.Set.Get());
-	TestTrue(TEXT("Ambiguous profile assignments do not expose guessed variants"), Toolkit->OutlineItems[0]->Children.IsEmpty());
-	TestFalse(TEXT("Ambiguous assignments disable authoring"), Toolkit->Document->CanEdit());
+	Toolkit->Buildings->Document->Open(Fixture.Set.Get());
+	TestTrue(TEXT("Ambiguous profile assignments do not expose guessed variants"), Toolkit->Buildings->OutlineItems[0]->Children.IsEmpty());
+	TestFalse(TEXT("Ambiguous assignments disable authoring"), Toolkit->Buildings->Document->CanEdit());
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
 	return true;
 }
@@ -891,36 +898,36 @@ bool FDeepLevelCityDecorationSymmetryPreviewTest::RunTest(const FString&)
 	Fixture.Catalog->Buildings[0].bCalibrated = true;
 	TSharedPtr<FDeepLevelCityBuildingDecorationEditor> Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FGuid First = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	Toolkit->SelectEntry(First);
+	Toolkit->Buildings->SelectEntry(First);
 	FText Error;
-	Toolkit->Document->SetTransform(FTransform(FRotator(0, 20, 0), FVector(100, 200, 80)), Error);
-	Toolkit->Document->CreateSymmetry(EAxis::Y);
-	if (!TestNotNull(TEXT("Toolkit creates a linked counterpart"), Toolkit->GetSelectedSymmetryPair())) { return false; }
-	const auto Pair = *Toolkit->GetSelectedSymmetryPair();
-	AActor* FirstActor = Toolkit->Preview->GetEntryActor(First);
-	AActor* SecondActor = Toolkit->Preview->GetEntryActor(Pair.Second);
+	Toolkit->Buildings->Document->SetTransform(FTransform(FRotator(0, 20, 0), FVector(100, 200, 80)), Error);
+	Toolkit->Buildings->Document->CreateSymmetry(EAxis::Y);
+	if (!TestNotNull(TEXT("Toolkit creates a linked counterpart"), Toolkit->Buildings->GetSelectedSymmetryPair())) { return false; }
+	const auto Pair = *Toolkit->Buildings->GetSelectedSymmetryPair();
+	AActor* FirstActor = Toolkit->Buildings->Preview->GetEntryActor(First);
+	AActor* SecondActor = Toolkit->Buildings->Preview->GetEntryActor(Pair.Second);
 	if (!TestNotNull(TEXT("Counterpart has a preview output"), SecondActor)) { return false; }
-	TestTrue(TEXT("Both outline entries show their link"), Toolkit->OutlineItems[0]->Children[0]->Children[0]->Detail.ToString().Contains(TEXT("Linked"))
-		&& Toolkit->OutlineItems[0]->Children[0]->Children[1]->Detail.ToString().Contains(TEXT("Linked")));
-	Toolkit->ApplyWidgetDelta(FVector(20, 30, 40), FRotator(0, 15, 0), FVector(0.25));
+	TestTrue(TEXT("Both outline entries show their link"), Toolkit->Buildings->OutlineItems[0]->Children[0]->Children[0]->Detail.ToString().Contains(TEXT("Linked"))
+		&& Toolkit->Buildings->OutlineItems[0]->Children[0]->Children[1]->Detail.ToString().Contains(TEXT("Linked")));
+	Toolkit->Buildings->ApplyWidgetDelta(FVector(20, 30, 40), FRotator(0, 15, 0), FVector(0.25));
 	TestTrue(TEXT("Counterpart preview updates during gizmo motion"), SecondActor->GetActorTransform().Equals(Pair.GetMirroredTransform(FirstActor->GetActorTransform()), 0.001));
-	Toolkit->EndWidgetDrag();
-	TestTrue(TEXT("Both actors remain stable across linked edits"), Toolkit->Preview->GetEntryActor(First) == FirstActor && Toolkit->Preview->GetEntryActor(Pair.Second) == SecondActor);
+	Toolkit->Buildings->EndWidgetDrag();
+	TestTrue(TEXT("Both actors remain stable across linked edits"), Toolkit->Buildings->Preview->GetEntryActor(First) == FirstActor && Toolkit->Buildings->Preview->GetEntryActor(Pair.Second) == SecondActor);
 	FHitResult Hit;
 	const FVector PartnerPosition = SecondActor->GetActorLocation();
-	TestFalse(TEXT("Surface snapping excludes both moving members of the pair"), Toolkit->Preview->TraceSurface(
+	TestFalse(TEXT("Surface snapping excludes both moving members of the pair"), Toolkit->Buildings->Preview->TraceSurface(
 		PartnerPosition + FVector(0, 0, 500), PartnerPosition - FVector(0, 0, 500), Hit));
 	TGuardValue<float> SurfaceOffset(GetMutableDefault<ULevelEditorViewportSettings>()->SnapToSurface.SnapOffsetExtent, 0.f);
-	Toolkit->PlaceSelectedOnSurface(FVector(300, 250, 0), FVector::UpVector);
+	Toolkit->Buildings->PlaceSelectedOnSurface(FVector(300, 250, 0), FVector::UpVector);
 	TestTrue(TEXT("Surface placement updates the linked actor too"), SecondActor->GetActorTransform().Equals(Pair.GetMirroredTransform(FirstActor->GetActorTransform()), 0.001));
-	TestTrue(TEXT("Surface placement retains the selected source"), Toolkit->GetSelectedEntryId() == First);
-	Toolkit->Document->UnlinkSymmetry();
-	TestTrue(TEXT("Unlink keeps existing preview objects"), Toolkit->Preview->GetEntryActor(First) == FirstActor && Toolkit->Preview->GetEntryActor(Pair.Second) == SecondActor);
+	TestTrue(TEXT("Surface placement retains the selected source"), Toolkit->Buildings->GetSelectedEntryId() == First);
+	Toolkit->Buildings->Document->UnlinkSymmetry();
+	TestTrue(TEXT("Unlink keeps existing preview objects"), Toolkit->Buildings->Preview->GetEntryActor(First) == FirstActor && Toolkit->Buildings->Preview->GetEntryActor(Pair.Second) == SecondActor);
 	const FVector DetachedPosition = SecondActor->GetActorLocation();
-	Toolkit->ApplyWidgetDelta(FVector(10, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
-	Toolkit->EndWidgetDrag();
+	Toolkit->Buildings->ApplyWidgetDelta(FVector(10, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->Buildings->EndWidgetDrag();
 	TestEqual(TEXT("Detached gizmo motion does not move the other actor"), SecondActor->GetActorLocation(), DetachedPosition);
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
 	return true;
@@ -940,9 +947,9 @@ bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 	Fixture.Profile->SetFlags(RF_Transient);
 	const auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FGuid Entry = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	const auto Preview = Toolkit->Preview;
+	const auto Preview = Toolkit->Buildings->Preview;
 	const auto Client = Preview->GetClient();
 	AActor* Actor = Preview->GetEntryActor(Entry);
 	if (!TestNotNull(TEXT("Selectable decoration exists"), Actor))
@@ -958,16 +965,16 @@ bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 	TRefCountPtr<HHitProxy> ActorHit = new HActor(Actor, nullptr);
 	TGuardValue<bool> SurfaceSnap(GetMutableDefault<ULevelEditorViewportSettings>()->SnapToSurface.bEnabled, true);
 	const FTransform Before = Actor->GetActorTransform();
-	Toolkit->SelectEntry({});
+	Toolkit->Buildings->SelectEntry({});
 	Client->ProcessClick(View, ActorHit, EKeys::LeftMouseButton, IE_Pressed, 0, 0);
-	TestFalse(TEXT("Press alone does not select before camera/gizmo drag classification"), Toolkit->GetSelectedEntryId().IsValid());
+	TestFalse(TEXT("Press alone does not select before camera/gizmo drag classification"), Toolkit->Buildings->GetSelectedEntryId().IsValid());
 	Client->ProcessClick(View, ActorHit, EKeys::LeftMouseButton, IE_Released, 0, 0);
-	TestEqual(TEXT("Native release click selects decoration even with surface snap enabled"), Toolkit->GetSelectedEntryId(), Entry);
-	TestTrue(TEXT("Selection synchronizes the details inspector"), Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->EntryProxy.Get());
+	TestEqual(TEXT("Native release click selects decoration even with surface snap enabled"), Toolkit->Buildings->GetSelectedEntryId(), Entry);
+	TestTrue(TEXT("Selection synchronizes the details inspector"), Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->EntryProxy.Get());
 	TestTrue(TEXT("Selection never moves decoration to the clicked surface"), Actor->GetActorTransform().Equals(Before));
 	TRefCountPtr<HHitProxy> WidgetHit = new HWidgetAxis(EAxisList::X);
 	Client->ProcessClick(View, WidgetHit, EKeys::LeftMouseButton, IE_Released, 0, 0);
-	TestEqual(TEXT("Clicking gizmo preserves selection"), Toolkit->GetSelectedEntryId(), Entry);
+	TestEqual(TEXT("Clicking gizmo preserves selection"), Toolkit->Buildings->GetSelectedEntryId(), Entry);
 	const auto& Commands = *Preview->GetCommandList();
 	Commands.ExecuteAction(FEditorViewportCommands::Get().RotateMode.ToSharedRef());
 	TestEqual(TEXT("Selected decoration enables native rotate command"), Client->GetWidgetMode(), UE::Widget::WM_Rotate);
@@ -992,20 +999,20 @@ bool FDeepLevelCityDecorationViewportSelectionTest::RunTest(const FString&)
 	Commands.ExecuteAction(FGenericCommands::Get().Undo.ToSharedRef());
 	TestEqual(TEXT("Viewport undo restores the deleted decoration"), Fixture.Profile->Variants[0].Entries.Num(), 2);
 	Client->ProcessClick(View, nullptr, EKeys::LeftMouseButton, IE_Released, 0, 0);
-	TestFalse(TEXT("Empty left click clears decoration selection"), Toolkit->GetSelectedEntryId().IsValid());
+	TestFalse(TEXT("Empty left click clears decoration selection"), Toolkit->Buildings->GetSelectedEntryId().IsValid());
 	Client->ProcessClick(View, ActorHit, EKeys::LeftMouseButton, IE_DoubleClick, 0, 0);
-	TestEqual(TEXT("Native double click also selects decoration"), Toolkit->GetSelectedEntryId(), Entry);
-	TestTrue(TEXT("Viewport and outline share one selection menu"), Toolkit->BuildSelectionMenu().IsValid());
+	TestEqual(TEXT("Native double click also selects decoration"), Toolkit->Buildings->GetSelectedEntryId(), Entry);
+	TestTrue(TEXT("Viewport and outline share one selection menu"), Toolkit->Buildings->BuildSelectionMenu().IsValid());
 	TestTrue(TEXT("Initial camera shows both required faces"), Client->GetViewRotation().Vector().GetSafeNormal2D().Equals(FVector(-1, -1, 0).GetSafeNormal()));
 	const FVector ManualLocation(2500, -1700, 900);
 	const FRotator ManualRotation(-12, 137, 0);
 	Client->SetViewLocation(ManualLocation);
 	Client->SetViewRotation(ManualRotation);
 	const FGuid OtherVariant = Authoring::AddVariant(*Fixture.Profile);
-	Toolkit->Document->SelectVariant(OtherVariant);
+	Toolkit->Buildings->Document->SelectVariant(OtherVariant);
 	TestTrue(TEXT("Variant change preserves camera position"), Client->GetViewLocation().Equals(ManualLocation));
 	TestTrue(TEXT("Variant change preserves camera rotation"), Client->GetViewRotation().Equals(ManualRotation));
-	Toolkit->Document->SelectBuilding(APackedLevelActor::StaticClass());
+	Toolkit->Buildings->Document->SelectBuilding(APackedLevelActor::StaticClass());
 	TestTrue(TEXT("Different building frames its own required face"), Client->GetViewRotation().Vector().GetSafeNormal2D().Equals(FVector::ForwardVector));
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
 	return true;
@@ -1150,26 +1157,26 @@ bool FDeepLevelCityDecorationFlexibleLinkInspectorTest::RunTest(const FString&)
 	Fixture.Catalog->Buildings[0].bCalibrated = true;
 	const auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
-	Toolkit->SelectEntry(Fixture.Profile->Variants[0].Entries[0].EntryGuid);
-	TestFalse(TEXT("Unlinked decorations have no link settings inspector"), Toolkit->EntryProxy->bHasSymmetry);
-	Toolkit->Document->CreateSymmetry(EAxis::Y);
-	const auto Pair = *Toolkit->Document->GetSymmetryPair();
-	TestTrue(TEXT("Linked decoration exposes the single settings inspector"), Toolkit->EntryProxy->bHasSymmetry);
-	Toolkit->SelectEntry(Pair.Second);
-	TestEqual(TEXT("Selecting target retains original source identity in inspector"), Toolkit->EntryProxy->Source, Toolkit->Document->GetEntry(Pair.First)->Name);
-	AActor* FirstActor = Toolkit->Preview->GetEntryActor(Pair.First);
-	AActor* SecondActor = Toolkit->Preview->GetEntryActor(Pair.Second);
-	Toolkit->EntryProxy->Symmetry.bSyncLocation = false;
-	Toolkit->EntryProxy->Symmetry.RotationMode = EDeepLevelCityDecorationRotationLink::Copy;
-	Toolkit->EntryProxy->Symmetry.RotationOffset = FRotator(15, 0, 0);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->SelectEntry(Fixture.Profile->Variants[0].Entries[0].EntryGuid);
+	TestFalse(TEXT("Unlinked decorations have no link settings inspector"), Toolkit->Buildings->EntryProxy->bHasSymmetry);
+	Toolkit->Buildings->Document->CreateSymmetry(EAxis::Y);
+	const auto Pair = *Toolkit->Buildings->Document->GetSymmetryPair();
+	TestTrue(TEXT("Linked decoration exposes the single settings inspector"), Toolkit->Buildings->EntryProxy->bHasSymmetry);
+	Toolkit->Buildings->SelectEntry(Pair.Second);
+	TestEqual(TEXT("Selecting target retains original source identity in inspector"), Toolkit->Buildings->EntryProxy->Source, Toolkit->Buildings->Document->GetEntry(Pair.First)->Name);
+	AActor* FirstActor = Toolkit->Buildings->Preview->GetEntryActor(Pair.First);
+	AActor* SecondActor = Toolkit->Buildings->Preview->GetEntryActor(Pair.Second);
+	Toolkit->Buildings->EntryProxy->Symmetry.bSyncLocation = false;
+	Toolkit->Buildings->EntryProxy->Symmetry.RotationMode = EDeepLevelCityDecorationRotationLink::Copy;
+	Toolkit->Buildings->EntryProxy->Symmetry.RotationOffset = FRotator(15, 0, 0);
 	FPropertyChangedEvent Event(FindFProperty<FProperty>(UDeepLevelCityDecorationEntryProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationEntryProxy, Symmetry)));
-	Toolkit->CommitInspector(Event);
-	TestTrue(TEXT("Native inspector settings commit through document"), !Toolkit->Document->GetSymmetryPair()->bSyncLocation);
-	TestTrue(TEXT("Settings edit preserves both preview actors"), Toolkit->Preview->GetEntryActor(Pair.First) == FirstActor && Toolkit->Preview->GetEntryActor(Pair.Second) == SecondActor);
+	Toolkit->Buildings->CommitInspector(Event);
+	TestTrue(TEXT("Native inspector settings commit through document"), !Toolkit->Buildings->Document->GetSymmetryPair()->bSyncLocation);
+	TestTrue(TEXT("Settings edit preserves both preview actors"), Toolkit->Buildings->Preview->GetEntryActor(Pair.First) == FirstActor && Toolkit->Buildings->Preview->GetEntryActor(Pair.Second) == SecondActor);
 	TestTrue(TEXT("Target preview receives copied rotation and offset"), SecondActor->GetActorQuat().Equals(FirstActor->GetActorQuat() * FRotator(15, 0, 0).Quaternion(), 0.0001));
-	Toolkit->Document->Undo();
-	TestTrue(TEXT("Undo restores settings inspector and baked transforms"), Toolkit->EntryProxy->Symmetry.bSyncLocation && Toolkit->Document->GetVariant()->HasValidSymmetry());
+	Toolkit->Buildings->Document->Undo();
+	TestTrue(TEXT("Undo restores settings inspector and baked transforms"), Toolkit->Buildings->EntryProxy->Symmetry.bSyncLocation && Toolkit->Buildings->Document->GetVariant()->HasValidSymmetry());
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
 	return true;
 }
@@ -1285,37 +1292,39 @@ bool FDeepLevelCityDecorationMultiSelectionPreviewTest::RunTest(const FString&)
 	Fixture.Catalog->Buildings[0].bCalibrated = true;
 	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FGuid First = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	Toolkit->SelectEntry(First);
-	Toolkit->Document->CreateSymmetry(EAxis::Y);
-	const FGuid Second = Toolkit->GetSelectedSymmetryPair()->Second;
-	Toolkit->SelectEntry(Second, true);
-	TestEqual(TEXT("Ctrl selection retains two decorations"), Toolkit->GetSelectedEntryIds().Num(), 2);
-	TestEqual(TEXT("Outline reflects both viewport selections"), Toolkit->Outline->GetSelectedItems().Num(), 2);
-	TestTrue(TEXT("Group inspector owns the displayed transform"), Toolkit->Inspector->GetSelectedObjects()[0].Get() == Toolkit->SelectionProxy);
-	Toolkit->ApplyWidgetDelta(FVector(40, 20, 10), FRotator::ZeroRotator, FVector::ZeroVector);
-	Toolkit->EndWidgetDrag();
-	for (const FGuid& Id : Toolkit->GetSelectedEntryIds())
+	Toolkit->Buildings->SelectEntry(First);
+	Toolkit->Buildings->Document->CreateSymmetry(EAxis::Y);
+	const FGuid Second = Toolkit->Buildings->GetSelectedSymmetryPair()->Second;
+	Toolkit->Buildings->SelectEntry(Second, true);
+	TestEqual(TEXT("Ctrl selection retains two decorations"), Toolkit->Buildings->GetSelectedEntryIds().Num(), 2);
+	TestEqual(TEXT("Outline reflects both viewport selections"), Toolkit->Buildings->Outline->GetSelectedItems().Num(), 2);
+	TestTrue(TEXT("Group inspector owns the displayed transform"), Toolkit->Buildings->Inspector->GetSelectedObjects()[0].Get() == Toolkit->Buildings->SelectionProxy);
+	Toolkit->Buildings->ApplyWidgetDelta(FVector(40, 20, 10), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->Buildings->EndWidgetDrag();
+	for (const FGuid& Id : Toolkit->Buildings->GetSelectedEntryIds())
 	{
-		TestTrue(TEXT("Both preview actors follow the document"), Toolkit->Preview->GetEntryActor(Id)->GetActorTransform().Equals(Toolkit->GetDecoration(Id)->LocalTransform));
+		TestTrue(TEXT("Both preview actors follow the document"), Toolkit->Buildings->Preview->GetEntryActor(Id)->GetActorTransform().Equals(Toolkit->Buildings->GetDecoration(Id)->LocalTransform));
 	}
-	Toolkit->SelectEntry(Second, true);
-	TestEqual(TEXT("Ctrl toggles a selected decoration off"), Toolkit->GetSelectedEntryIds().Num(), 1);
-	const auto EntryRow = Toolkit->OutlineItems[0]->Children[0]->Children.FindByPredicate([&](const auto& Row) { return Row->Entry == Second; });
+	Toolkit->Buildings->SelectEntry(Second, true);
+	TestEqual(TEXT("Ctrl toggles a selected decoration off"), Toolkit->Buildings->GetSelectedEntryIds().Num(), 1);
+    if (!TestTrue(TEXT("Building outline retains its variant after multi-selection"), !Toolkit->Buildings->OutlineItems.IsEmpty() && !Toolkit->Buildings->OutlineItems[0]->Children.IsEmpty()))
+    { Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted); return false; }
+	const auto EntryRow = Toolkit->Buildings->OutlineItems[0]->Children[0]->Children.FindByPredicate([&](const auto& Row) { return Row->Entry == Second; });
 	if (TestNotNull(TEXT("Second decoration has an outline row"), EntryRow))
 	{
-		Toolkit->Outline->SetItemSelection(*EntryRow, true, ESelectInfo::OnMouseClick);
-		TestEqual(TEXT("Outline multi-selection updates document selection"), Toolkit->GetSelectedEntryIds().Num(), 2);
+		Toolkit->Buildings->Outline->SetItemSelection(*EntryRow, true, ESelectInfo::OnMouseClick);
+		TestEqual(TEXT("Outline multi-selection updates document selection"), Toolkit->Buildings->GetSelectedEntryIds().Num(), 2);
 	}
-	Toolkit->SelectSymmetryPivot(First);
-	TestTrue(TEXT("Symmetry center selects both linked decorations"), Toolkit->GetSelectedEntryIds().Contains(First) && Toolkit->GetSelectedEntryIds().Contains(Second));
-	TestTrue(TEXT("Symmetry point selects the center"), Toolkit->IsSymmetryPivotSelected());
-	TestEqual(TEXT("Gizmo moves onto the persisted center"), Toolkit->Preview->GetClient()->GetWidgetLocation(), Toolkit->GetSelectedSymmetryPair()->PlaneOrigin);
-	Toolkit->ApplyWidgetDelta(FVector(90, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
-	Toolkit->EndWidgetDrag();
-	TestTrue(TEXT("Center drag updates the linked preview atomically"), Toolkit->Preview->GetEntryActor(Second)->GetActorTransform().Equals(Toolkit->GetDecoration(Second)->LocalTransform));
-	TestEqual(TEXT("Center inspector counts both linked decorations"), Toolkit->SelectionProxy->DecorationCount, 2);
+	Toolkit->Buildings->SelectSymmetryPivot(First);
+	TestTrue(TEXT("Symmetry center selects both linked decorations"), Toolkit->Buildings->GetSelectedEntryIds().Contains(First) && Toolkit->Buildings->GetSelectedEntryIds().Contains(Second));
+	TestTrue(TEXT("Symmetry point selects the center"), Toolkit->Buildings->IsSymmetryPivotSelected());
+	TestEqual(TEXT("Gizmo moves onto the persisted center"), Toolkit->Buildings->Preview->GetClient()->GetWidgetLocation(), Toolkit->Buildings->GetSelectedSymmetryPair()->PlaneOrigin);
+	Toolkit->Buildings->ApplyWidgetDelta(FVector(90, 0, 0), FRotator::ZeroRotator, FVector::ZeroVector);
+	Toolkit->Buildings->EndWidgetDrag();
+	TestTrue(TEXT("Center drag updates the linked preview atomically"), Toolkit->Buildings->Preview->GetEntryActor(Second)->GetActorTransform().Equals(Toolkit->Buildings->GetDecoration(Second)->LocalTransform));
+	TestEqual(TEXT("Center inspector counts both linked decorations"), Toolkit->Buildings->SelectionProxy->DecorationCount, 2);
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
 	return true;
 }
@@ -1386,19 +1395,19 @@ bool FDeepLevelCityDecorationSymmetryPlacementTest::RunTest(const FString&)
 	Fixture.Profile->SetFlags(RF_Transient);
 	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FGuid Source = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	Toolkit->SelectEntry(Source);
+	Toolkit->Buildings->SelectEntry(Source);
 	FText Error;
-	Toolkit->Document->SetTransform(FTransform(FVector(100, 200, 80)), Error);
+	Toolkit->Buildings->Document->SetTransform(FTransform(FVector(100, 200, 80)), Error);
 	const FVector Center(100, 400, 80);
 	const bool bDirty = Fixture.Profile->GetOutermost()->IsDirty();
-	Toolkit->BeginSymmetryPlacement();
-	TestTrue(TEXT("Auto mirror enters a placement mode"), Toolkit->IsPlacingSymmetry());
-	TestTrue(TEXT("Mouse placement builds a ghost before confirmation"), Toolkit->UpdateSymmetryPlacement(Center));
-	TestEqual(TEXT("Pending placement has a ghost actor"), Toolkit->Preview->GetSymmetryPreviewCount(), 1);
-	TestEqual(TEXT("Auto plane is inferred from cursor and selection"), Toolkit->GetSymmetryPlacementNormal(), FVector::RightVector);
-	AActor* Ghost = Toolkit->Preview->GetSymmetryPreviewActor(Source);
+	Toolkit->Buildings->BeginSymmetryPlacement();
+	TestTrue(TEXT("Auto mirror enters a placement mode"), Toolkit->Buildings->IsPlacingSymmetry());
+	TestTrue(TEXT("Mouse placement builds a ghost before confirmation"), Toolkit->Buildings->UpdateSymmetryPlacement(Center));
+	TestEqual(TEXT("Pending placement has a ghost actor"), Toolkit->Buildings->Preview->GetSymmetryPreviewCount(), 1);
+	TestEqual(TEXT("Auto plane is inferred from cursor and selection"), Toolkit->Buildings->GetSymmetryPlacementNormal(), FVector::RightVector);
+	AActor* Ghost = Toolkit->Buildings->Preview->GetSymmetryPreviewActor(Source);
 	if (TestNotNull(TEXT("Ghost exists in the preview scene"), Ghost))
 	{
 		TestEqual(TEXT("Ghost is at the reflected location"), Ghost->GetActorLocation(), FVector(100, 600, 80));
@@ -1409,27 +1418,27 @@ bool FDeepLevelCityDecorationSymmetryPlacementTest::RunTest(const FString&)
 		TestTrue(TEXT("Ghost retains its rendered geometry"), !Components.IsEmpty());
 		if (!Components.IsEmpty()) { TestTrue(TEXT("Ghost uses translucent preview material"), Components[0]->GetMaterial(0)->GetBlendMode() == BLEND_Translucent); }
 	}
-	TestEqual(TEXT("Pending ghosts are not authored entries"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
+	TestEqual(TEXT("Pending ghosts are not authored entries"), Toolkit->Buildings->Document->GetVariant()->Entries.Num(), 1);
 	TestEqual(TEXT("Pending placement does not dirty the profile"), Fixture.Profile->GetOutermost()->IsDirty(), bDirty);
-	TestTrue(TEXT("Placement hides the editing gizmo"), Toolkit->Preview->GetClient()->GetWidgetMode() == UE::Widget::WM_None);
-	Toolkit->CancelSymmetryPlacement();
-	TestEqual(TEXT("Cancel destroys all ghosts"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
-	TestEqual(TEXT("Cancel preserves authored objects"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
-	Toolkit->BeginSymmetryPlacement();
-	Toolkit->UpdateSymmetryPlacement(Center);
-	TestTrue(TEXT("Click confirmation creates the mirror"), Toolkit->CommitSymmetryPlacement());
-	TestFalse(TEXT("Confirm leaves placement mode"), Toolkit->IsPlacingSymmetry());
-	TestEqual(TEXT("Confirm destroys temporary ghosts"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
-	TestEqual(TEXT("Confirmed placement has its baked mirror"), Toolkit->Document->GetVariant()->Entries.Num(), 2);
-	TestEqual(TEXT("Confirmed pivot is exactly between its objects"), Toolkit->Preview->GetClient()->GetWidgetLocation(), Center);
-	Toolkit->Document->Undo();
-	TestEqual(TEXT("One undo removes the confirmed mirror"), Toolkit->Document->GetVariant()->Entries.Num(), 1);
-	Toolkit->SelectEntry(Source);
-	Toolkit->BeginSymmetryPlacement();
-	Toolkit->UpdateSymmetryPlacement(Center);
-	Toolkit->SelectEntry({});
-	TestFalse(TEXT("Selection change exits placement"), Toolkit->IsPlacingSymmetry());
-	TestEqual(TEXT("Selection change clears ghost actors"), Toolkit->Preview->GetSymmetryPreviewCount(), 0);
+	TestTrue(TEXT("Placement hides the editing gizmo"), Toolkit->Buildings->Preview->GetClient()->GetWidgetMode() == UE::Widget::WM_None);
+	Toolkit->Buildings->CancelSymmetryPlacement();
+	TestEqual(TEXT("Cancel destroys all ghosts"), Toolkit->Buildings->Preview->GetSymmetryPreviewCount(), 0);
+	TestEqual(TEXT("Cancel preserves authored objects"), Toolkit->Buildings->Document->GetVariant()->Entries.Num(), 1);
+	Toolkit->Buildings->BeginSymmetryPlacement();
+	Toolkit->Buildings->UpdateSymmetryPlacement(Center);
+	TestTrue(TEXT("Click confirmation creates the mirror"), Toolkit->Buildings->CommitSymmetryPlacement());
+	TestFalse(TEXT("Confirm leaves placement mode"), Toolkit->Buildings->IsPlacingSymmetry());
+	TestEqual(TEXT("Confirm destroys temporary ghosts"), Toolkit->Buildings->Preview->GetSymmetryPreviewCount(), 0);
+	TestEqual(TEXT("Confirmed placement has its baked mirror"), Toolkit->Buildings->Document->GetVariant()->Entries.Num(), 2);
+	TestEqual(TEXT("Confirmed pivot is exactly between its objects"), Toolkit->Buildings->Preview->GetClient()->GetWidgetLocation(), Center);
+	Toolkit->Buildings->Document->Undo();
+	TestEqual(TEXT("One undo removes the confirmed mirror"), Toolkit->Buildings->Document->GetVariant()->Entries.Num(), 1);
+	Toolkit->Buildings->SelectEntry(Source);
+	Toolkit->Buildings->BeginSymmetryPlacement();
+	Toolkit->Buildings->UpdateSymmetryPlacement(Center);
+	Toolkit->Buildings->SelectEntry({});
+	TestFalse(TEXT("Selection change exits placement"), Toolkit->Buildings->IsPlacingSymmetry());
+	TestEqual(TEXT("Selection change clears ghost actors"), Toolkit->Buildings->Preview->GetSymmetryPreviewCount(), 0);
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
 	return true;
 }
@@ -1476,13 +1485,13 @@ bool FDeepLevelCityDecorationSymmetrySnappingTest::RunTest(const FString&)
 	Fixture.Profile->SetFlags(RF_Transient);
 	auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
 	Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
-	Toolkit->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
+	Toolkit->Buildings->Document->SelectVariant(Fixture.Profile->Variants[0].VariantGuid);
 	const FGuid Source = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
-	Toolkit->SelectEntry(Source);
+	Toolkit->Buildings->SelectEntry(Source);
 	const FVector Origin(13, 17, 5);
 	FText Error;
-	Toolkit->Document->SetTransform(FTransform(Origin), Error);
-	const auto Client = Toolkit->Preview->GetClient();
+	Toolkit->Buildings->Document->SetTransform(FTransform(Origin), Error);
+	const auto Client = Toolkit->Buildings->Preview->GetClient();
 	Client->SetWidgetCoordSystemSpace(COORD_World);
 	FSceneViewFamilyContext Family(FSceneViewFamily::ConstructionValues(Client->Viewport, Client->GetScene(), Client->EngineShowFlags));
 	FSceneViewInitOptions Options;
@@ -1493,46 +1502,269 @@ bool FDeepLevelCityDecorationSymmetrySnappingTest::RunTest(const FString&)
 	Options.ProjectionMatrix.M[0][0] = 0.002f;
 	Options.ProjectionMatrix.M[1][1] = 0.002f;
 	FSceneView View(Options);
-	Toolkit->BeginSymmetryPlacement();
-	TestTrue(TEXT("Cursor near X can preview"), Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View));
-	TestTrue(TEXT("A nearby axis is acquired automatically"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
-	TestTrue(TEXT("Axis attraction also removes off-axis movement"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 0, 0), 0.001));
-	TestTrue(TEXT("HUD reports the active global grid step"), Toolkit->GetViewportStatus().ToString().Contains(FText::AsNumber(50).ToString()));
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 18, 0), &View);
-	TestTrue(TEXT("Release hysteresis keeps an acquired guide stable"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
-	TestTrue(TEXT("Moving away releases axis attraction"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
-	TestTrue(TEXT("Free movement still follows the grid"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 50, 0), 0.001));
+	Toolkit->Buildings->BeginSymmetryPlacement();
+	TestTrue(TEXT("Cursor near X can preview"), Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View));
+	TestTrue(TEXT("A nearby axis is acquired automatically"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::X);
+	TestTrue(TEXT("Axis attraction also removes off-axis movement"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 0, 0), 0.001));
+	TestTrue(TEXT("HUD reports the active global grid step"), Toolkit->Buildings->GetViewportStatus().ToString().Contains(FText::AsNumber(50).ToString()));
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 18, 0), &View);
+	TestTrue(TEXT("Release hysteresis keeps an acquired guide stable"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::X);
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
+	TestTrue(TEXT("Moving away releases axis attraction"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::None);
+	TestTrue(TEXT("Free movement still follows the grid"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(150, 50, 0), 0.001));
 	Settings->CurrentPosGridSize = 1;
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
-	TestTrue(TEXT("Changing the shared toolbar step changes placement immediately"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(200, 0, 0), 0.001));
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
+	TestTrue(TEXT("Changing the shared toolbar step changes placement immediately"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(200, 0, 0), 0.001));
 	Settings->GridEnabled = false;
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
-	TestTrue(TEXT("Disabling grid leaves axis attraction available"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 0, 0), 0.001));
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View, true);
-	TestTrue(TEXT("Holding Shift bypasses axis attraction"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
-	TestTrue(TEXT("Free modifier retains the exact unsnapped cursor pose"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 8, 0), 0.001));
-	Toolkit->ToggleSymmetryPlacementAxis(EAxis::Z);
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 8, 90), &View);
-	TestTrue(TEXT("Manual lock projects the center onto Z"), Toolkit->GetSymmetryPlacementCenter().Equals(Origin + FVector(0, 0, 90), 0.001));
-	Toolkit->ToggleSymmetryPlacementAxis(EAxis::Z);
-	Toolkit->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
-	TestTrue(TEXT("Repeating the axis key restores automatic/free placement"), Toolkit->GetSymmetrySnappedAxis() == EAxis::None);
-	Toolkit->CancelSymmetryPlacement();
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View);
+	TestTrue(TEXT("Disabling grid leaves axis attraction available"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 0, 0), 0.001));
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 8, 0), &View, true);
+	TestTrue(TEXT("Holding Shift bypasses axis attraction"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::None);
+	TestTrue(TEXT("Free modifier retains the exact unsnapped cursor pose"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(173, 8, 0), 0.001));
+	Toolkit->Buildings->ToggleSymmetryPlacementAxis(EAxis::Z);
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 8, 90), &View);
+	TestTrue(TEXT("Manual lock projects the center onto Z"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(Origin + FVector(0, 0, 90), 0.001));
+	Toolkit->Buildings->ToggleSymmetryPlacementAxis(EAxis::Z);
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + FVector(173, 37, 0), &View);
+	TestTrue(TEXT("Repeating the axis key restores automatic/free placement"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::None);
+	Toolkit->Buildings->CancelSymmetryPlacement();
 	const FQuat Basis = FRotator(0, 45, 0).Quaternion();
-	Toolkit->Document->SetTransform(FTransform(Basis, Origin), Error);
+	Toolkit->Buildings->Document->SetTransform(FTransform(Basis, Origin), Error);
 	Client->SetWidgetCoordSystemSpace(COORD_Local);
 	Settings->GridEnabled = true;
 	Settings->CurrentPosGridSize = 0;
-	Toolkit->BeginSymmetryPlacement();
-	Toolkit->UpdateSymmetryPlacement(Origin + Basis.RotateVector(FVector(173, 8, 0)), &View);
+	Toolkit->Buildings->BeginSymmetryPlacement();
+	Toolkit->Buildings->UpdateSymmetryPlacement(Origin + Basis.RotateVector(FVector(173, 8, 0)), &View);
 	const FVector LocalCenter = Origin + Basis.RotateVector(FVector(150, 0, 0));
-	TestTrue(TEXT("Local guide attraction respects the gizmo basis"), Toolkit->GetSymmetrySnappedAxis() == EAxis::X);
-	TestTrue(TEXT("Grid steps follow the rotated local guide"), Toolkit->GetSymmetryPlacementCenter().Equals(LocalCenter, 0.001));
-	TestTrue(TEXT("Confirmation keeps the snapped preview"), Toolkit->CommitSymmetryPlacement());
-	TestTrue(TEXT("Confirmed pair midpoint matches its snapped center"), Toolkit->GetSelectionTransform().GetLocation().Equals(LocalCenter, 0.001));
+	TestTrue(TEXT("Local guide attraction respects the gizmo basis"), Toolkit->Buildings->GetSymmetrySnappedAxis() == EAxis::X);
+	TestTrue(TEXT("Grid steps follow the rotated local guide"), Toolkit->Buildings->GetSymmetryPlacementCenter().Equals(LocalCenter, 0.001));
+	TestTrue(TEXT("Confirmation keeps the snapped preview"), Toolkit->Buildings->CommitSymmetryPlacement());
+	TestTrue(TEXT("Confirmed pair midpoint matches its snapped center"), Toolkit->Buildings->GetSelectionTransform().GetLocation().Equals(LocalCenter, 0.001));
 	Toolkit->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed);
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelWindowToolkitTest, "DeepLevelDesignPCG.Editor.City.DecorationEditor.WindowLighting", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDeepLevelWindowToolkitTest::RunTest(const FString&)
+{
+    FDecorationFixture Fixture;
+    auto WindowVariant = Fixture.Profile->Variants[0]; WindowVariant.RegenerateIdentities();
+    WindowVariant.SelectionGroup = TEXT("NightWindows");
+    for (auto& Entry : WindowVariant.Entries) Entry.bWindowLight = true;
+    const FGuid Window = WindowVariant.Entries[0].EntryGuid;
+    const FGuid Base = Fixture.Profile->Variants[0].Entries[0].EntryGuid;
+    Fixture.Profile->Variants.Add(WindowVariant);
+    auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
+    Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
+    Toolkit->OpenWindowBuilding(Fixture.Profile->BuildingClass);
+    TestTrue(TEXT("Existing decoration toolkit switches to window mode"), Toolkit->Windows->bWindowLightingMode);
+    TestNotNull(TEXT("Base decorations stay visible as context"), Toolkit->Windows->Preview->GetEntryActor(Base));
+    Toolkit->Windows->SelectEntry(Window);
+    Toolkit->Windows->EntryProxy->Entry.WindowIntensity = 2.7f;
+    FPropertyChangedEvent Event(FindFProperty<FProperty>(UDeepLevelCityDecorationEntryProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationEntryProxy, Entry)));
+    Toolkit->Windows->CommitInspector(Event);
+    AActor* Preview = Toolkit->Windows->Preview->GetEntryActor(Window);
+    auto* Instances = Preview ? Preview->FindComponentByClass<UInstancedStaticMeshComponent>() : nullptr;
+    if (TestNotNull(TEXT("Window preview uses native instancing"), Instances))
+    {
+        TestEqual(TEXT("Preview has exactly four lighting channels"), Instances->NumCustomDataFloats, 4);
+        TestEqual(TEXT("Inspector brightness reaches render instance data"), Instances->PerInstanceSMCustomData[3], 2.7f);
+    }
+    Toolkit->Windows->Document->SetEntryEnabled(Window, false);
+    TestTrue(TEXT("Switch hides the whole preview window"), Preview && Preview->IsHiddenEd());
+    Toolkit->Windows->Document->Undo();
+    TestTrue(TEXT("Undo restores the whole window"), Toolkit->Windows->Document->GetEntry()->bEnabled);
+    TestEqual(TEXT("Decoration view retains the original base arrangement"), Toolkit->Buildings->OutlineItems[0]->Children.Num(), 1);
+    auto WindowTab=Toolkit->GetTabManager()->FindExistingLiveTab(Toolkit->WindowsTab);
+    auto BuildingTab=Toolkit->GetTabManager()->FindExistingLiveTab(Toolkit->WorkspaceTab);
+    TestTrue(TEXT("All three authoring tabs exist without mode buttons"), WindowTab.IsValid() && BuildingTab.IsValid() && Toolkit->GetTabManager()->FindExistingLiveTab(Toolkit->StreetsTab).IsValid());
+    TestTrue(TEXT("Window and building tabs own separate widget trees"), Toolkit->Windows->WorkspaceWidget != Toolkit->Buildings->WorkspaceWidget);
+    TestTrue(TEXT("Both tabs edit the same set asset"), Toolkit->Windows->Document->GetSet() == Toolkit->Buildings->Document->GetSet());
+    TestTrue(TEXT("Window tab retains its own filtered view"), Toolkit->Windows->bWindowLightingMode);
+    Toolkit->Windows->SetWindowLightingMode(true); Toolkit->Windows->AddArrangement();
+    TestEqual(TEXT("Adding an arrangement in window mode chooses its group"), Toolkit->Windows->Document->GetVariant()->SelectionGroup, FName(TEXT("NightWindows")));
+    Toolkit->CloseWindow(EAssetEditorCloseReason::CloseAllAssetEditors);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityStreetDecorationPanelTest,
+    "DeepLevelDesignPCG.Editor.City.DecorationEditor.StreetsAndSidewalks",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityStreetDecorationPanelTest::RunTest(const FString&)
+{
+    FDecorationFixture Fixture;
+    TStrongObjectPtr<UDeepLevelCityDecorationCategory> Category(NewObject<UDeepLevelCityDecorationCategory>(GetTransientPackage(), NAME_None, RF_Transactional));
+    auto Toolkit = MakeShared<FDeepLevelCityBuildingDecorationEditor>();
+    Toolkit->InitEditor(EToolkitMode::Standalone, {}, Fixture.Set.Get());
+    auto Panel = SNew(SDeepLevelCityStreetDecorationPanel).Editor(Toolkit);
+    Panel->LinkCategory(Category.Get());
+    Panel->LinkCategory(Category.Get());
+    TestEqual(TEXT("Linking an existing category twice does not duplicate it"), Fixture.Set->Categories.Num(), 1);
+    TestTrue(TEXT("Native category asset belongs to the toolkit save scope"), Toolkit->GetEditingObjects().Contains(Category.Get()));
+    TestEqual(TEXT("Details edits the actual category, not a copied entry list"), Panel->Details->GetSelectedObjects()[0].Get(), static_cast<UObject*>(Category.Get()));
+    {
+        const FScopedTransaction Transaction(NSLOCTEXT("DecorationTests", "EditStreet", "Edit Street Entry"));
+        Category->Modify();
+        Category->Entries.Emplace_GetRef().Probability = .4;
+        Category->PostEditChange();
+    }
+    TestTrue(TEXT("Native editing supplies an entry identity"), Category->Entries[0].EntryGuid.IsValid());
+    Toolkit->Buildings->Document->Undo();
+    TestTrue(TEXT("Category entry editing supports Undo"), Category->Entries.IsEmpty());
+    Toolkit->Buildings->Document->Redo();
+    TestEqual(TEXT("Category entry editing supports Redo"), Category->Entries.Num(), 1);
+    Panel->UnlinkCategory();
+    TestTrue(TEXT("Unlink only removes set membership"), Fixture.Set->Categories.IsEmpty() && IsValid(Category.Get()));
+    TestTrue(TEXT("Removed category clears the property selection"), Panel->Details->GetSelectedObjects().IsEmpty());
+    Toolkit->Buildings->Document->Undo();
+    TestEqual(TEXT("Unlink supports Undo"), Fixture.Set->Categories.Num(), 1);
+    TestEqual(TEXT("Undo restores category list"), Panel->Categories.Num(), 1);
+    Toolkit->ChooseSet(FAssetData());
+    TestTrue(TEXT("Changing city context clears stale categories"), Panel->Categories.IsEmpty());
+    TestTrue(TEXT("Changing city context clears stale Details"), Panel->Details->GetSelectedObjects().IsEmpty());
+    Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityStreetMapTest,
+    "DeepLevelDesignPCG.Editor.City.DecorationEditor.RoadMap",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityStreetMapTest::RunTest(const FString&)
+{
+    FDeepLevelCityGrid Grid;
+    Grid.Origin = FVector(-9000, 4300, 0);
+    FDeepLevelCityLayoutFragment Fragment;
+    Fragment.SourceGuid = FGuid::NewGuid();
+    for (int32 X = 0; X < 3; ++X)
+    {
+        auto& Cell = Fragment.Cells.Emplace_GetRef();
+        Cell.Cell = FIntPoint(X, 0);
+        Cell.OccupancyMask = int32(X < 2 ? EDeepLevelCityOccupancy::Road : EDeepLevelCityOccupancy::Sidewalk);
+    }
+    for (int32 X = 0; X < 2; ++X)
+    {
+        auto& Anchor = Fragment.Anchors.Emplace_GetRef();
+        Anchor.StableId = FGuid::NewGuid();
+        Anchor.Transform.SetLocation(Grid.CellToWorld(FIntPoint(X,0)));
+
+    }
+    TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
+    FText Error;
+    const TArray<FDeepLevelCityLayoutFragment> Fragments{Fragment};
+    if (!TestTrue(TEXT("Native road snapshot builds"), FDeepLevelCityLayoutBuilder::Build(Grid, Fragments, Snapshot, Error))) return false;
+    TStrongObjectPtr<UDeepLevelCityDecorationSet> Set(NewObject<UDeepLevelCityDecorationSet>());
+    TStrongObjectPtr<UDeepLevelCityDecorationCategory> Category(NewObject<UDeepLevelCityDecorationCategory>());
+    Category->CategoryTag = FGameplayTag::RequestGameplayTag(FName(TEXT("City.Anchor.Sidewalk.Edge")));
+    auto& Entry = Category->Entries.Emplace_GetRef();
+    Entry.EntryGuid = FGuid::NewGuid();
+    Entry.Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+
+    Set->Categories.Add(Category.Get());
+    TArray<FDeepLevelCityResolvedDecoration> Resolved;
+    if (!TestTrue(TEXT("Preview uses native resolved output"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 1337, Resolved, Error))) return false;
+    if (!TestEqual(TEXT("Both road anchors produce placements"), Resolved.Num(), 2)) return false;
+    const auto Map = SNew(SDeepLevelCityStreetMap);
+    Map->SetData(Snapshot, Resolved, true);
+    TestEqual(TEXT("Adjacent road cells merge without swallowing sidewalk"), Map->GetCellRunCount(), 2);
+    TestEqual(TEXT("Map retains native placements"), Map->GetPlacementCount(), Resolved.Num());
+    for (FVector2D Size : {FVector2D(800, 500), FVector2D(340, 900)})
+    {
+        const FVector2D World(Resolved[0].Transform.GetLocation());
+        const FVector2D Local = Map->WorldToMap(World, Size);
+        TestTrue(TEXT("Projection remains correct across viewport sizes and nonzero city origins"), Map->MapToWorld(Local, Size).Equals(World, .001));
+        TestEqual(TEXT("Clicking native placement selects its authoring rule"), Map->PickRule(Local, Size), Entry.EntryGuid);
+        TestFalse(TEXT("Empty map area does not select a rule"), Map->PickRule(FVector2D(-100,-100), Size).IsValid());
+    }
+    Map->SetData({}, {}, true);
+    TestEqual(TEXT("Clearing city context clears old roads"), Map->GetCellRunCount(), 0);
+    TestEqual(TEXT("Clearing city context clears old placements"), Map->GetPlacementCount(), 0);
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelStreetViewportTest,"DeepLevelDesignPCG.Editor.City.DecorationEditor.StreetViewport3D",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FDeepLevelStreetViewportTest::RunTest(const FString&)
+{
+    auto WorldScene=MakeShared<FAdvancedPreviewScene>(FPreviewScene::ConstructionValues());
+    UWorld* World=WorldScene->GetWorld();
+    auto* City=World->SpawnActor<ADeepLevelCityLayoutActor>();
+    auto* Road=World->SpawnActor<ADeepLevelRoadNetworkActor>(); Road->CityLayout=City;
+    auto* Mesh=NewObject<UInstancedStaticMeshComponent>(Road); Road->AddInstanceComponent(Mesh);
+    Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube")));
+    Mesh->RegisterComponent(); Mesh->AddInstance(FTransform(FVector(1000,2000,0)),true);
+    TSharedPtr<SDeepLevelCityStreetViewport> View=SNew(SDeepLevelCityStreetViewport).IsActive(false);
+    View->SetSource(City,true);
+    TestEqual(TEXT("3D preview copies actual source-road mesh components"),View->GetRoadComponentCount(),1);
+    FDeepLevelCityResolvedDecoration P; P.Mesh=Mesh->GetStaticMesh();P.EntryGuid=FGuid::NewGuid();P.Transform.SetLocation(FVector(1000,2000,100));
+    const TArray<FDeepLevelCityResolvedDecoration> Placements{P}; View->SetPlacements(Placements);
+    TestEqual(TEXT("Native placement produces a real preview mesh actor"),View->GetPreviewActorCount(),1);
+    auto* PreviewMesh=View->MeshAppearances[0].Component.Get();
+    auto* OriginalMaterial=PreviewMesh->GetMaterial(0);
+    TestTrue(TEXT("Unselected initial scene retains original appearance"),View->IsRuleFocused(P.EntryGuid));
+    const TSet<FGuid> OtherGroup{FGuid::NewGuid()};View->SetFocusedRules(OtherGroup);
+    TestTrue(TEXT("Unfocused geometry uses translucent preview context material"),PreviewMesh->GetMaterial(0)==View->ContextMaterial.Get());
+    View->SetFocusedRules({P.EntryGuid});TestTrue(TEXT("Focused group restores the actual material"),PreviewMesh->GetMaterial(0)==OriginalMaterial);
+    View->SetFocusedRules({});TestTrue(TEXT("Clearing focus restores all original materials"),PreviewMesh->GetMaterial(0)==OriginalMaterial);
+    View->SelectRule(P.EntryGuid);View->Frame();
+    View->SetPlacements({});TestEqual(TEXT("Refreshing removes old preview actors"),View->GetPreviewActorCount(),0);
+    View->SetSource(nullptr,true);TestEqual(TEXT("Source clearing removes road references"),View->GetRoadComponentCount(),0);
+    TestEqual(TEXT("Preview does not modify original road instances"),Mesh->GetInstanceCount(),1);
+    View->SetSource(City,true);View->SetPlacements(Placements);
+    auto RetainedClient=View->Client;
+    const TWeakPtr<FAdvancedPreviewScene> RetainedScene=View->Scene;
+    UWorld* PreviewWorld=RetainedClient->GetWorld();
+    View->ShutdownPreview();
+    TestNull(TEXT("Pre-exit detaches rendering before preview world cleanup"),RetainedClient->Viewport);
+    TestEqual(TEXT("Pre-exit removes live decoration actors"),View->GetPreviewActorCount(),0);
+    View->ShutdownPreview();
+    View.Reset();
+    TestTrue(TEXT("Retained client owns its preview scene through late Slate destruction"),RetainedScene.IsValid() && RetainedClient->GetWorld()==PreviewWorld);
+    RetainedClient.Reset();
+    TestFalse(TEXT("Final client release releases the preview scene"),RetainedScene.IsValid());
+    return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelStreetGroupFocusTest,"DeepLevelDesignPCG.Editor.City.DecorationEditor.GroupFocusAndLighting",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FDeepLevelStreetGroupFocusTest::RunTest(const FString&)
+{
+    const TCHAR* Section=TEXT("DeepLevelDesignPCG.DecorationPreview");
+    bool PriorNight=true;const bool bHadPreference=GConfig->GetBool(Section,TEXT("NightLighting"),PriorNight,GEditorPerProjectIni);
+    ON_SCOPE_EXIT { if(bHadPreference)GConfig->SetBool(Section,TEXT("NightLighting"),PriorNight,GEditorPerProjectIni);else GConfig->RemoveKey(Section,TEXT("NightLighting"),GEditorPerProjectIni);GConfig->Flush(false,GEditorPerProjectIni); };
+    GConfig->RemoveKey(Section,TEXT("NightLighting"),GEditorPerProjectIni);
+    FDecorationFixture Fixture;
+    auto Toolkit=MakeShared<FDeepLevelCityBuildingDecorationEditor>();Toolkit->InitEditor(EToolkitMode::Standalone,{},Fixture.Set.Get());
+    auto Panel=SNew(SDeepLevelCityStreetDecorationPanel).Editor(Toolkit);
+    TestTrue(TEXT("Fresh preview defaults to night"),Panel->bNightPreview);
+    TestTrue(TEXT("Nothing starts selected"),Panel->List->GetSelectedItems().IsEmpty());
+    auto* A=NewObject<UDeepLevelCityDecorationCategory>(Fixture.Set.Get());auto* B=NewObject<UDeepLevelCityDecorationCategory>(Fixture.Set.Get());
+    A->Entries.Emplace_GetRef().EntryGuid=FGuid::NewGuid();B->Entries.Emplace_GetRef().EntryGuid=FGuid::NewGuid();
+    const FGuid RuleA=A->Entries[0].EntryGuid,RuleB=B->Entries[0].EntryGuid;
+    Panel->LinkCategory(A);Panel->LinkCategory(B);
+    auto ItemA=*Panel->Categories.FindByPredicate([A](const auto& Item){return Item->Get()==A;});
+    auto ItemB=*Panel->Categories.FindByPredicate([B](const auto& Item){return Item->Get()==B;});
+    Panel->List->ClearSelection();Panel->SelectCategory({},ESelectInfo::Direct);
+    TestTrue(TEXT("No selected groups means all rules are fully visible"),Panel->View3D->IsRuleFocused(RuleA)&&Panel->View3D->IsRuleFocused(RuleB));
+    Panel->List->SetItemSelection(ItemA,true);
+    TestTrue(TEXT("Selecting a group focuses it and dims other groups"),Panel->View3D->IsRuleFocused(RuleA)&&!Panel->View3D->IsRuleFocused(RuleB));
+    Panel->List->SetItemSelection(ItemB,true);
+    TestEqual(TEXT("Multiple categories can be selected together"),Panel->List->GetSelectedItems().Num(),2);
+    TestTrue(TEXT("Both selected groups remain fully visible"),Panel->View3D->IsRuleFocused(RuleA)&&Panel->View3D->IsRuleFocused(RuleB));
+    Panel->SelectRule(RuleB);
+    TestEqual(TEXT("Viewport picking focuses the owning group"),Panel->List->GetSelectedItems().Num(),1);
+    TestTrue(TEXT("Viewport picking chooses the matching category inspector"),Panel->Selected.Get()==B);
+    Panel->SetNightPreference(false);
+    auto Reopened=SNew(SDeepLevelCityStreetDecorationPanel).Editor(Toolkit);
+    TestFalse(TEXT("Day preference survives workspace recreation"),Reopened->bNightPreview);
+    Reopened->SetNightPreference(true);
+    auto ReopenedAgain=SNew(SDeepLevelCityStreetDecorationPanel).Editor(Toolkit);
+    TestTrue(TEXT("Night preference survives workspace recreation"),ReopenedAgain->bNightPreview);
+    Toolkit->CloseWindow(EAssetEditorCloseReason::AssetForceDeleted);
+    return true;
 }
 
 #endif

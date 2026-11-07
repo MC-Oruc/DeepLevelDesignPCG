@@ -10,6 +10,7 @@
 #include "Engine/CollisionProfile.h"
 #include "Engine/DataAsset.h"
 #include "City/DeepLevelCityLayout.h"
+#include "ZoneGraphTypes.h"
 #include "DeepLevelRoadPCG.generated.h"
 
 
@@ -22,6 +23,7 @@ class UDeepLevelRoadSplineComponent;
 class ADeepLevelRoadNetworkActor;
 class UMaterialInterface;
 class UStaticMesh;
+struct FDeepLevelRoadNetworkPlan;
 
 UENUM(BlueprintType)
 enum class EDeepLevelRoadTileKind : uint8
@@ -78,6 +80,7 @@ enum class EDeepLevelRoadNetworkChange : uint8
 {
 	Geometry,
 	Structure,
+	Traffic,
 	GeneratedComponents
 };
 
@@ -127,6 +130,16 @@ public:
 		FDeepLevelCityLayoutFragment& OutFragment,
 		FText& OutError) const override;
 	void NotifyRoadNetworkChanged(EDeepLevelRoadNetworkChange Change = EDeepLevelRoadNetworkChange::Geometry);
+	bool BuildRoadPlan(FDeepLevelRoadNetworkPlan& OutPlan, FText& OutError) const;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditAnywhere, Category = "@Deep Level Design PCG|Traffic")
+	bool bGenerateTrafficLanes = false;
+	UPROPERTY(EditAnywhere, Category = "@Deep Level Design PCG|Traffic", meta = (EditCondition = "bGenerateTrafficLanes"))
+	FZoneLaneProfileRef TwoWayLaneProfile;
+	UPROPERTY(EditAnywhere, Category = "@Deep Level Design PCG|Traffic", meta = (EditCondition = "bGenerateTrafficLanes"))
+	FZoneLaneProfileRef WideLaneProfile;
+#endif
 
 #if WITH_EDITOR
 	static FDeepLevelRoadNetworkEditorChanged OnRoadNetworkEditorChanged;
@@ -152,6 +165,7 @@ private:
 	void SynchronizeCityLayoutRegistration();
 	void SynchronizeTransformToCityLayout();
 	void RegenerateSidewalkInfills();
+	bool bSidewalkInfillRegenerationPending = false;
 	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;
 	void OrganizeGeneratedRoadMeshes(UPCGComponent* GeneratedComponent);
 

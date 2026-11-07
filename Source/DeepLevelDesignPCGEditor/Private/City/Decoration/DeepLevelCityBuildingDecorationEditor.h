@@ -28,6 +28,8 @@ public:
 	FName Name;
 	UPROPERTY(EditAnywhere, Category = "Variant", meta = (ClampMin = "0.0"))
 	double SelectionWeight = 1.0;
+	UPROPERTY(EditAnywhere, Category = "Variant")
+	FName SelectionGroup;
 };
 
 UCLASS()
@@ -121,26 +123,20 @@ struct FDeepLevelCityDecorationViewportShortcut
 	FText Action;
 };
 
-class FDeepLevelCityBuildingDecorationEditor final : public FAssetEditorToolkit, public FGCObject
+class FDeepLevelCityBuildingDecorationEditor;
+class FDeepLevelCityDecorationWorkspace final : public FGCObject, public TSharedFromThis<FDeepLevelCityDecorationWorkspace>
 {
 public:
-	virtual ~FDeepLevelCityBuildingDecorationEditor() override;
-	void InitEditor(EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host, UDeepLevelCityDecorationSet* Set);
-	virtual FName GetToolkitFName() const override { return TEXT("DeepLevelCityBuildingDecorationEditor"); }
-	virtual FText GetBaseToolkitName() const override;
-	virtual FText GetToolkitName() const override;
-	virtual FText GetToolkitToolTipText() const override;
-	virtual bool IncludeAssetInRestoreOpenAssetsPrompt(UObject* Asset) const override;
-	virtual FString GetWorldCentricTabPrefix() const override { return TEXT("Building Decoration"); }
-	virtual FLinearColor GetWorldCentricTabColorScale() const override { return FLinearColor(0.6f, 0.25f, 0.8f); }
-	virtual void RegisterTabSpawners(const TSharedRef<FTabManager>& Manager) override;
-	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& Manager) override;
-	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
-	virtual FString GetReferencerName() const override { return TEXT("FDeepLevelCityBuildingDecorationEditor"); }
-
+    ~FDeepLevelCityDecorationWorkspace();
+    virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+    virtual FString GetReferencerName() const override { return TEXT("DeepLevelCityDecorationWorkspace"); }
 	const FDeepLevelCityBuildingDecorationEntry* GetSelectedEntry() const { return Document->GetEntry(); }
 	FGuid GetSelectedEntryId() const { return Document->GetEntryId(); }
 	void SelectEntry(const FGuid& Id, bool bToggle = false, bool bAdd = false);
+    void SetWindowLightingMode(bool bValue);
+    FReply ImportWindowLighting();
+    void AddArrangement();
+    FGuid GetPreviewBaseVariant() const { return PreviewBaseVariant; }
 	void SelectSymmetryPivot(const FGuid& Id) { bSetSettings = false; Document->SelectSymmetryPivot(Id); }
 	bool IsSymmetryPivotSelected() const { return Document->IsSymmetryPivotSelected(); }
 	const TArray<FGuid>& GetSelectedEntryIds() const { return Document->GetSelectedEntryIds(); }
@@ -175,8 +171,12 @@ public:
 	TSharedPtr<SWidget> BuildSelectionMenu();
 
 private:
+    friend class FDeepLevelCityBuildingDecorationEditor;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FDeepLevelCityDecorationToolkitIntegrationTest;
+	friend class SDeepLevelCityStreetDecorationPanel;
+	friend class FDeepLevelCityStreetDecorationPanelTest;
+	friend class FDeepLevelWindowToolkitTest;
 	friend class FDeepLevelCityDecorationSetSelectionTest;
 	friend class FDeepLevelCityDecorationOutlineTest;
 	friend class FDeepLevelCityDecorationSymmetryPreviewTest;
@@ -186,8 +186,8 @@ private:
 	friend class FDeepLevelCityDecorationSymmetryPlacementTest;
 	friend class FDeepLevelCityDecorationSymmetrySnappingTest;
 #endif
-	TSharedRef<SDockTab> SpawnWorkspace(const FSpawnTabArgs& Args);
-	TSharedRef<SDockTab> SpawnEnvironment(const FSpawnTabArgs& Args);
+    void InitWorkspace(UDeepLevelCityDecorationSet* Set);
+    FReply ShowWindowSettings();
 	TSharedRef<SWidget> BuildWorkspace();
 	TSharedRef<SWidget> BuildViewportControls();
 	TSharedRef<SWidget> BuildViewportOverlay();
@@ -245,7 +245,11 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FDeepLevelCityDecorationDocumentIssue>>> IssueList;
 	TMap<FGuid, FText> PreviewErrors;
 	FText OperationError;
-	FString Search;
+    FString Search;
+    bool bWindowLightingMode = false;
+    FGuid PreviewBaseVariant;
+    float WindowDensity = .25f;
+    int32 WindowSeed = 1337;
 	bool bRefreshing = false;
 	bool bSetSettings = false;
 	bool bShowPlacementGuide = false;
@@ -254,15 +258,60 @@ private:
 	FVector SymmetryPlacementNormal = FVector::ZeroVector;
 	EAxis::Type SymmetrySnappedAxis = EAxis::None;
 	bool bSymmetryFreeAxis = false;
-	static const FName WorkspaceTab;
-	static const FName EnvironmentTab;
+    TSharedPtr<SWidget> WorkspaceWidget;
+    TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Toolkit;
+    bool bWindowSettings = false;
+};
+
+class FDeepLevelCityBuildingDecorationEditor final : public FAssetEditorToolkit
+{
+public:
+	virtual ~FDeepLevelCityBuildingDecorationEditor() override;
+	void InitEditor(EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host, UDeepLevelCityDecorationSet* Set);
+	virtual FName GetToolkitFName() const override { return TEXT("DeepLevelCityBuildingDecorationEditor"); }
+	virtual FText GetBaseToolkitName() const override;
+	virtual FText GetToolkitName() const override;
+	virtual FText GetToolkitToolTipText() const override;
+	virtual bool IncludeAssetInRestoreOpenAssetsPrompt(UObject* Asset) const override;
+	virtual FString GetWorldCentricTabPrefix() const override { return TEXT("Building Decoration"); }
+	virtual FLinearColor GetWorldCentricTabColorScale() const override { return FLinearColor(0.6f, 0.25f, 0.8f); }
+	virtual void RegisterTabSpawners(const TSharedRef<FTabManager>& Manager) override;
+	virtual void UnregisterTabSpawners(const TSharedRef<FTabManager>& Manager) override;
+
+    void OpenWindowBuilding(const TSoftClassPtr<AActor>& Building);
+    void OpenStreetDecorations();
+private:
+    friend class FDeepLevelCityDecorationWorkspace;
+    friend class SDeepLevelCityStreetDecorationPanel;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FDeepLevelCityDecorationToolkitIntegrationTest;
+	friend class SDeepLevelCityStreetDecorationPanel;
+	friend class FDeepLevelCityStreetDecorationPanelTest;
+	friend class FDeepLevelWindowToolkitTest;
+	friend class FDeepLevelCityDecorationSetSelectionTest;
+	friend class FDeepLevelCityDecorationOutlineTest;
+	friend class FDeepLevelCityDecorationSymmetryPreviewTest;
+	friend class FDeepLevelCityDecorationViewportSelectionTest;
+	friend class FDeepLevelCityDecorationFlexibleLinkInspectorTest;
+	friend class FDeepLevelCityDecorationMultiSelectionPreviewTest;
+	friend class FDeepLevelCityDecorationSymmetryPlacementTest;
+	friend class FDeepLevelCityDecorationSymmetrySnappingTest;
+#endif
+    void ChooseSet(const FAssetData& Asset);
+    TSharedRef<SDockTab> SpawnWorkspace(const FSpawnTabArgs& Args);
+    TSharedRef<SDockTab> SpawnWindows(const FSpawnTabArgs& Args);
+    TSharedRef<SDockTab> SpawnStreets(const FSpawnTabArgs& Args);
+    TSharedRef<SDockTab> SpawnEnvironment(const FSpawnTabArgs& Args);
+    TSharedPtr<FDeepLevelCityDecorationWorkspace> Buildings;
+    TSharedPtr<FDeepLevelCityDecorationWorkspace> Windows;
+    static const FName WorkspaceTab, WindowsTab, StreetsTab, EnvironmentTab;
 };
 
 class FDeepLevelCityBuildingDecorationViewportClient final : public FEditorViewportClient
 {
 public:
 	FDeepLevelCityBuildingDecorationViewportClient(const TSharedRef<FAdvancedPreviewScene>& Scene, const TSharedRef<SEditorViewport>& Widget,
-		TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Editor);
+		TWeakPtr<FDeepLevelCityDecorationWorkspace> Editor);
 	virtual void Draw(const FSceneView* View, FPrimitiveDrawInterface* PDI) override;
 	virtual void DrawCanvas(FViewport& Viewport, FSceneView& View, FCanvas& Canvas) override;
 	virtual FVector GetWidgetLocation() const override;
@@ -280,19 +329,19 @@ public:
 	bool UpdateSymmetryCursor(FSceneView& View, int32 X, int32 Y);
 private:
 	TSharedRef<FAdvancedPreviewScene> SceneOwner;
-	TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Editor;
+	TWeakPtr<FDeepLevelCityDecorationWorkspace> Editor;
 };
 
 class SDeepLevelCityBuildingDecorationViewport final : public SEditorViewport
 {
 public:
 	SLATE_BEGIN_ARGS(SDeepLevelCityBuildingDecorationViewport) {}
-		SLATE_ARGUMENT(TWeakPtr<FDeepLevelCityBuildingDecorationEditor>, Editor)
+		SLATE_ARGUMENT(TWeakPtr<FDeepLevelCityDecorationWorkspace>, Editor)
 	SLATE_END_ARGS()
 	void Construct(const FArguments& Args);
 	virtual ~SDeepLevelCityBuildingDecorationViewport() override;
 	void ShutdownPreview();
-	void Synchronize(const TSoftClassPtr<AActor>& BuildingClass, const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId);
+	void Synchronize(const TSoftClassPtr<AActor>& BuildingClass, const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId, FGuid BaseVariant = {});
 	void SetPlacementGuide(const FDeepLevelBuildingPlacementDefinition* Definition, bool bShowBounds = true);
 	void DrawExposureLabels(const FSceneView* View, FCanvas* Canvas) const;
 	AActor* GetEntryActor(const FGuid& Id) const;
@@ -324,7 +373,7 @@ private:
 	AActor* SpawnEntry(const FDeepLevelCityBuildingDecorationEntry& Entry);
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	TSharedPtr<FDeepLevelCityBuildingDecorationViewportClient> Client;
-	TWeakPtr<FDeepLevelCityBuildingDecorationEditor> Editor;
+	TWeakPtr<FDeepLevelCityDecorationWorkspace> Editor;
 	TWeakObjectPtr<AActor> BuildingActor;
 	TMap<FGuid, TWeakObjectPtr<AActor>> DecorationActors;
 	TMap<FGuid, FDeepLevelCityDecorationSurface> DecorationSurfaces;

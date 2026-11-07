@@ -88,7 +88,12 @@ public:
 	void CopyEntry();
 	void PasteEntry();
 	void MoveEntry(int32 Direction);
-	void SetVariantFields(FName Name, double Weight);
+	void SetVariantFields(FName Name, double Weight, FName SelectionGroup);
+    bool ImportWindows(UMaterialInterface* Material, FText& Error);
+    void SetEntryEnabled(const FGuid& Entry, bool bEnabled);
+    void FillWindows(float Probability, int32 Seed);
+    void SetWindowMaterial(UMaterialInterface* Material);
+
 	bool SetEntryFields(const FDeepLevelCityBuildingDecorationEntry& Desired, const FDeepLevelCityBuildingDecorationEntry& Baseline, FText& Error);
 	bool SetTransform(const FTransform& Transform, FText& Error);
 	void ApplyDragTransform(const FTransform& Transform);
@@ -118,6 +123,7 @@ private:
 	TObjectPtr<UDeepLevelCityDecorationSet> Set;
 	TObjectPtr<UDeepLevelBuildingPlacementCatalog> Catalog;
 	TObjectPtr<UDeepLevelCityBuildingDecorationProfile> Profile;
+	mutable TOptional<FDeepLevelCityBuildingDecorationVariant> VariantView;
 	TSoftClassPtr<AActor> BuildingClass;
 	FGuid VariantId;
 	FGuid EntryId;

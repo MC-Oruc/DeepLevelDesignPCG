@@ -52,11 +52,13 @@ struct DEEPLEVELDESIGNPCG_API FDeepLevelBuildingFacadeSpan
 
 namespace DeepLevelBuildingFacades
 {
+	inline constexpr double DefaultSeamTolerance = 10.0;
 	DEEPLEVELDESIGNPCG_API bool Resolve(
 		TArray<FDeepLevelCityBuilding>& Buildings,
 		const FDeepLevelCityGrid& Grid,
 		const TMap<FIntPoint, FDeepLevelCityCellState>& Cells,
-		FText& OutError);
+		FText& OutError,
+		double SeamTolerance = DefaultSeamTolerance);
 
 	DEEPLEVELDESIGNPCG_API bool IsPointVisible(
 		const FDeepLevelCityBuilding& Building,

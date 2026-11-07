@@ -184,7 +184,7 @@ bool FDeepLevelCityDecorationDocument::CanEdit() const
 	{
 		if (!Variant.VariantGuid.IsValid() || VariantIds.Contains(Variant.VariantGuid)) { return false; }
 		VariantIds.Add(Variant.VariantGuid);
-		if (!Variant.HasValidSymmetry()) { return false; }
+		if (!Profile->BuildVariantView(Variant).HasValidSymmetry()) { return false; }
 		for (const auto& Entry : Variant.Entries)
 		{
 			if (!Entry.EntryGuid.IsValid() || EntryIds.Contains(Entry.EntryGuid)) { return false; }
@@ -200,12 +200,16 @@ bool FDeepLevelCityDecorationDocument::CanEdit() const
 
 const FDeepLevelCityBuildingDecorationVariant* FDeepLevelCityDecorationDocument::GetVariant() const
 {
-	return Profile && VariantId.IsValid() ? Authoring::FindVariant(*static_cast<const UDeepLevelCityBuildingDecorationProfile*>(Profile.Get()), VariantId) : nullptr;
+	const auto* Variant = Profile && VariantId.IsValid() ? Authoring::FindVariant(*static_cast<const UDeepLevelCityBuildingDecorationProfile*>(Profile.Get()), VariantId) : nullptr;
+	if (!Variant || Profile->WindowDefinitions.IsEmpty() || (Variant->WindowStates.IsEmpty() && Variant->SelectionGroup != FName(TEXT("NightWindows")))
+		|| Variant->Entries.ContainsByPredicate([](const auto& Entry) { return Entry.bWindowLight; })) return Variant;
+	if (!VariantView.IsSet() || VariantView->VariantGuid != VariantId) VariantView = Profile->BuildVariantView(*Variant);
+	return &VariantView.GetValue();
 }
 
 const FDeepLevelCityBuildingDecorationEntry* FDeepLevelCityDecorationDocument::GetEntry() const
 {
-	return Profile && VariantId.IsValid() && EntryId.IsValid() ? Authoring::FindEntry(*static_cast<const UDeepLevelCityBuildingDecorationProfile*>(Profile.Get()), VariantId, EntryId) : nullptr;
+	return GetEntry(EntryId);
 }
 
 FDeepLevelCityBuildingDecorationEntry* FDeepLevelCityDecorationDocument::MutableEntry()
@@ -293,7 +297,10 @@ void FDeepLevelCityDecorationDocument::Edit(const FText& Description, EDeepLevel
 	if (EditMode == EDeepLevelCityDecorationEditMode::Staging)
 	{
 		check(Profile->HasAnyFlags(RF_Transient));
+		Profile->ExpandWindowEntries();
 		Mutation();
+		Profile->CompactWindowEntries(VariantId);
+		VariantView.Reset();
 		Notify(Change);
 		return;
 	}
@@ -303,7 +310,10 @@ void FDeepLevelCityDecorationDocument::Edit(const FText& Description, EDeepLevel
 		Profile->Modify();
 		FProperty* Property = FindFProperty<FProperty>(Profile->GetClass(), GET_MEMBER_NAME_CHECKED(UDeepLevelCityBuildingDecorationProfile, Variants));
 		Profile->PreEditChange(Property);
+		Profile->ExpandWindowEntries();
 		Mutation();
+		Profile->CompactWindowEntries(VariantId);
+		VariantView.Reset();
 		FPropertyChangedEvent Event(Property);
 		Profile->PostEditChangeProperty(Event);
 	}
@@ -387,7 +397,8 @@ void FDeepLevelCityDecorationDocument::AddEntries(TConstArrayView<FDeepLevelCity
 
 const FDeepLevelCityBuildingDecorationEntry* FDeepLevelCityDecorationDocument::GetEntry(const FGuid& Id) const
 {
-	return Profile ? Authoring::FindEntry(*Profile, VariantId, Id) : nullptr;
+	const auto* Variant = GetVariant();
+	return Variant ? Variant->Entries.FindByPredicate([&](const auto& Entry) { return Entry.EntryGuid == Id; }) : nullptr;
 }
 
 const FDeepLevelCityDecorationSymmetryPair* FDeepLevelCityDecorationDocument::GetSymmetryPair() const
@@ -591,10 +602,12 @@ bool FDeepLevelCityDecorationDocument::CommitVariants(const TArray<FDeepLevelCit
 	if (EditMode != EDeepLevelCityDecorationEditMode::Undoable || !CanEdit()) { return false; }
 	TStrongObjectPtr<UDeepLevelCityBuildingDecorationProfile> Candidate(NewObject<UDeepLevelCityBuildingDecorationProfile>());
 	Candidate->BuildingClass = Profile->BuildingClass;
+	Candidate->WindowDefinitions = Profile->WindowDefinitions;
 	Candidate->Variants = Variants;
+	Candidate->CompactWindowEntries();
 	if (!Candidate->Validate(Error)) { return false; }
 	Edit(LOCTEXT("BatchEdit", "Edit Building Decoration Arrangement"), EDeepLevelCityDecorationChange::Structure,
-		[&] { Profile->Variants = Variants; });
+		[&] { Profile->WindowDefinitions = Candidate->WindowDefinitions; Profile->Variants = Candidate->Variants; });
 	return true;
 }
 
@@ -670,15 +683,16 @@ void FDeepLevelCityDecorationDocument::MoveEntry(int32 Direction)
 		[&] { Authoring::FindVariant(*Profile, VariantId)->Entries.Swap(Index, Index + Direction); });
 }
 
-void FDeepLevelCityDecorationDocument::SetVariantFields(FName Name, double Weight)
+void FDeepLevelCityDecorationDocument::SetVariantFields(FName Name, double Weight, FName SelectionGroup)
 {
 	const auto* Variant = GetVariant();
-	if (!Variant || (Variant->Name == Name && Variant->SelectionWeight == Weight) || !FMath::IsFinite(Weight) || Weight < 0.0) { return; }
+	if (!Variant || (Variant->Name == Name && Variant->SelectionWeight == Weight && Variant->SelectionGroup == SelectionGroup) || !FMath::IsFinite(Weight) || Weight < 0.0) { return; }
 	Edit(LOCTEXT("EditVariant", "Edit Decoration Variant"), EDeepLevelCityDecorationChange::Metadata, [&]
 	{
 		auto* Target = Authoring::FindVariant(*Profile, VariantId);
 		Target->Name = Name;
 		Target->SelectionWeight = Weight;
+		Target->SelectionGroup = SelectionGroup;
 	});
 }
 
@@ -688,12 +702,18 @@ bool FDeepLevelCityDecorationDocument::SetEntryFields(const FDeepLevelCityBuildi
 	const auto* Current = GetEntry();
 	if (!CanEdit() || !Current || Desired.EntryGuid != EntryId || Baseline.EntryGuid != EntryId) { return false; }
 	FDeepLevelCityBuildingDecorationEntry Patch = *Current;
+    if (Desired.bEnabled != Baseline.bEnabled) Patch.bEnabled = Desired.bEnabled;
+    if (Desired.bWindowLight != Baseline.bWindowLight) Patch.bWindowLight = Desired.bWindowLight;
+    if (Desired.WindowMaterialOverride != Baseline.WindowMaterialOverride) Patch.WindowMaterialOverride = Desired.WindowMaterialOverride;
+    if (Desired.WindowColor != Baseline.WindowColor) Patch.WindowColor = Desired.WindowColor;
+    if (Desired.WindowIntensity != Baseline.WindowIntensity) Patch.WindowIntensity = Desired.WindowIntensity;
 	if (Desired.Name != Baseline.Name) { Patch.Name = Desired.Name; }
 	if (Desired.Output != Baseline.Output) { Patch.Output = Desired.Output; }
 	if (Desired.Mesh != Baseline.Mesh) { Patch.Mesh = Desired.Mesh; }
 	if (Desired.ActorClass != Baseline.ActorClass) { Patch.ActorClass = Desired.ActorClass; }
 	if (Desired.DecalMaterial != Baseline.DecalMaterial) { Patch.DecalMaterial = Desired.DecalMaterial; }
 	if (Desired.DecalSize != Baseline.DecalSize) { Patch.DecalSize = Desired.DecalSize; }
+	if (!(Desired.Rendering == Baseline.Rendering)) { Patch.Rendering = Desired.Rendering; }
 	if (Desired.bAutoFacade != Baseline.bAutoFacade) { Patch.bAutoFacade = Desired.bAutoFacade; }
 	if (Desired.Facades != Baseline.Facades) { Patch.Facades = Desired.Facades; }
 	if (!Desired.LocalTransform.Equals(Baseline.LocalTransform)) { Patch.LocalTransform = Desired.LocalTransform; }
@@ -704,8 +724,9 @@ bool FDeepLevelCityDecorationDocument::SetEntryFields(const FDeepLevelCityBuildi
 		if (Patch.Output != EDeepLevelCityDecorationOutput::Actor) { Patch.ActorClass.Reset(); }
 		if (Patch.Output != EDeepLevelCityDecorationOutput::Decal) { Patch.DecalMaterial.Reset(); }
 	}
-	const bool bOutputChanged = Patch.Output != Current->Output || Patch.Mesh != Current->Mesh || Patch.ActorClass != Current->ActorClass
-		|| Patch.DecalMaterial != Current->DecalMaterial || Patch.DecalSize != Current->DecalSize;
+	const bool bOutputChanged = Patch.bEnabled != Current->bEnabled || Patch.bWindowLight != Current->bWindowLight
+        || Patch.WindowMaterialOverride != Current->WindowMaterialOverride || Patch.WindowColor != Current->WindowColor || Patch.WindowIntensity != Current->WindowIntensity || Patch.Output != Current->Output || Patch.Mesh != Current->Mesh || Patch.ActorClass != Current->ActorClass
+		|| Patch.DecalMaterial != Current->DecalMaterial || Patch.DecalSize != Current->DecalSize || !(Patch.Rendering == Current->Rendering);
 	const bool bTransformChanged = !Patch.LocalTransform.Equals(Current->LocalTransform);
 	const bool bFacadeChanged = Patch.bAutoFacade != Current->bAutoFacade || Patch.Facades != Current->Facades;
 	if (bTransformChanged && !ValidateLinkedTransform(Patch.LocalTransform, Error)) { return false; }
@@ -715,6 +736,17 @@ bool FDeepLevelCityDecorationDocument::SetEntryFields(const FDeepLevelCityBuildi
 	Edit(LOCTEXT("EditEntry", "Edit Building Decoration"), Change, [&]
 	{
 		*MutableEntry() = Patch;
+		if (Patch.bWindowLight && Patch.WindowRoomGuid.IsValid())
+		{
+			for (auto& Part : Authoring::FindVariant(*Profile,VariantId)->Entries)
+			{
+				if (!Part.bWindowLight || Part.WindowRoomGuid != Patch.WindowRoomGuid) continue;
+				Part.bEnabled = Patch.bEnabled;
+				Part.WindowColor = Patch.WindowColor;
+				Part.WindowIntensity = Patch.WindowIntensity;
+				Part.WindowMaterialOverride = Patch.WindowMaterialOverride;
+			}
+		}
 		if (bTransformChanged) { SynchronizeSymmetryTransform(); }
 	});
 	return true;
@@ -812,6 +844,8 @@ void FDeepLevelCityDecorationDocument::ApplyDragVariant(FDeepLevelCityBuildingDe
 		Profile->Modify();
 	}
 	*Authoring::FindVariant(*Profile, VariantId) = MoveTemp(Candidate);
+	Profile->CompactWindowEntries(VariantId);
+	VariantView.Reset();
 	BroadcastTransformChange();
 }
 
@@ -841,6 +875,7 @@ void FDeepLevelCityDecorationDocument::Redo() { if (bClosed || EditMode == EDeep
 void FDeepLevelCityDecorationDocument::PostUndo(bool bSuccess)
 {
 	if (!bSuccess || bClosed) { return; }
+	VariantView.Reset();
 	Catalog = Set ? Set->BuildingCatalog.LoadSynchronous() : nullptr;
 	if (Set) { ResolveBuildingProfile(); }
 	ReconcileSelection();
@@ -851,6 +886,7 @@ void FDeepLevelCityDecorationDocument::ObjectChanged(UObject* Object, FPropertyC
 {
 	if (bClosed || bMutating) { return; }
 	if (Object != Profile && Object != Set && Object != Catalog) { return; }
+	VariantView.Reset();
 	EndDrag(false, true);
 	if (Object == Set)
 	{
@@ -864,6 +900,7 @@ void FDeepLevelCityDecorationDocument::ObjectChanged(UObject* Object, FPropertyC
 
 void FDeepLevelCityDecorationDocument::Notify(EDeepLevelCityDecorationChange Change)
 {
+	VariantView.Reset();
 	RefreshIssues();
 	if (Change == EDeepLevelCityDecorationChange::Transform) { BroadcastTransformChange(); }
 	else { OnChanged.Broadcast(Change, EntryId); }

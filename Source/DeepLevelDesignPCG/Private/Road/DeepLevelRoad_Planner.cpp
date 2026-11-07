@@ -322,6 +322,8 @@ namespace
 				{
 					Candidates.Add({&Definition, QuarterTurns});
 					TotalWeight += Definition.SelectionWeight;
+					// Symmetric connectivity must not randomize the authored texture direction.
+					break;
 				}
 			}
 		}

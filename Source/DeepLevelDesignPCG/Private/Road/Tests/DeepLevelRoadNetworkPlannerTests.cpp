@@ -491,4 +491,36 @@ bool FDeepLevelRoadCellOverrideTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelRoadTextureDirectionTest,
+	"DeepLevelDesignPCG.Editor.RoadNetwork.TextureDirection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelRoadTextureDirectionTest::RunTest(const FString& Parameters)
+{
+	using namespace DeepLevelRoadNetworkPlannerTests;
+	UDeepLevelRoadTileCatalog* Catalog = MakeCatalog();
+	const TArray<const UPCGSplineData*> Splines = {
+		MakeSpline(FVector(-2500, 0, 0), FVector(2500, 0, 0)),
+		MakeSpline(FVector(0, -2500, 0), FVector(0, 2500, 0))};
+	for (int32 Seed = 0; Seed < 32; ++Seed)
+	{
+		FDeepLevelRoadNetworkPlan Plan;
+		FText Error;
+		if (!TestTrue(TEXT("Direction plan builds"), FDeepLevelRoadNetworkPlanner::BuildPlan(
+			*Catalog, Splines, MakeGrid(), Seed, Plan, Error))) return false;
+		for (const FDeepLevelRoadTilePlacement& Placement : Plan.Placements)
+		{
+			if (Placement.Kind != EDeepLevelRoadTileKind::Road || Placement.bJunctionApproach) continue;
+			const bool bHorizontal = Placement.ConnectionMask == (TestPositiveX | TestNegativeX);
+			const bool bVertical = Placement.ConnectionMask == (TestPositiveY | TestNegativeY);
+			if (bHorizontal || bVertical)
+			{
+				TestTrue(TEXT("Straight texture orientation is canonical across cells and seeds"),
+					FMath::IsNearlyEqual(Placement.Transform.Rotator().Yaw, bHorizontal ? 0.0 : 90.0, 0.01));
+			}
+		}
+	}
+	return true;
+}
+
 #endif

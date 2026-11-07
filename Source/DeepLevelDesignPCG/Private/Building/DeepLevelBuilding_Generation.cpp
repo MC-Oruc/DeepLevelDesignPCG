@@ -5,6 +5,7 @@
 #include "DeepLevelDesignPCGModule.h"
 #include "Engine/World.h"
 #include "PackedLevelActor/PackedLevelActor.h"
+#include "Components/StaticMeshComponent.h"
 #include "PCGComponent.h"
 #include "PCGManagedResource.h"
 #include "Serialization/BufferArchive.h"
@@ -315,6 +316,17 @@ void ADeepLevelPCGBuildingLineActor::OnGenerationCompleted(UPCGComponent* Compon
 		UE_LOG(LogDeepLevelBuildingGeneration, Error, TEXT("%s"), *LastGenerationError.ToString());
 		BroadcastBuildingFailure(LastGenerationError);
 		return;
+	}
+	// Packed buildings are fixed layout output. Preserve simulated props, not accidental movable facade batches.
+	for (AActor* Actor : Actors)
+	{
+		if (!Actor->IsA<APackedLevelActor>()) continue;
+		if (USceneComponent* Root = Actor->GetRootComponent()) Root->SetMobility(EComponentMobility::Static);
+		TInlineComponentArray<UStaticMeshComponent*> Meshes(Actor);
+		for (UStaticMeshComponent* Mesh : Meshes)
+		{
+			if (!Mesh->IsSimulatingPhysics()) Mesh->SetMobility(EComponentMobility::Static);
+		}
 	}
 	GeneratedFragment = GeneratingLayout->Fragment;
 	UDeepLevelBuildingPlacementCatalog* LoadedCatalog = Catalog.LoadSynchronous();

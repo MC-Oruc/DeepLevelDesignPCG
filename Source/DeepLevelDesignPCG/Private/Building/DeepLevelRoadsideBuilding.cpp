@@ -152,6 +152,7 @@ void ADeepLevelPCGRoadsideBuildingActor::PostDuplicate(const EDuplicateMode::Typ
 	LayoutSourceGuid = FGuid::NewGuid();
 	LayoutRevision = 0;
 	GeneratedBuildings.Reset();
+	GeneratedSidewalkInfills.Reset();
 	PreparedLayout.Reset();
 	GeneratingLayout.Reset();
 	bOutputCurrent = false;
@@ -185,6 +186,7 @@ bool ADeepLevelPCGRoadsideBuildingActor::BuildCityLayoutFragment(
 	OutFragment.SourceRevision = LayoutRevision;
 	if (bOutputCurrent)
 	{
+		OutFragment.Anchors = GeneratedSidewalkInfills;
 		OutFragment.Buildings = GeneratedBuildings;
 		if (!OutFragment.Buildings.IsEmpty())
 		{
@@ -649,7 +651,6 @@ void ADeepLevelPCGRoadsideBuildingActor::AlignBuildingsVolFinal()
 		ReportRoadsideFailure(*this, SnapshotError);
 		return;
 	}
-	CityLayout->NotifySidewalkInfillChanged();
 	Modify();
 	PCGComponent->GenerateLocal(true);
 #endif
@@ -727,12 +728,24 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCompleted(UPCGCompo
 		ReportRoadsideFailure(*this, LastGenerationError);
 		return;
 	}
+	GeneratedSidewalkInfills = GeneratingLayout->Fragment.Anchors;
 	bOutputCurrent = true;
 	LastGenerationError = FText::GetEmpty();
 	GeneratingLayout.Reset();
 	MarkPackageDirty();
 	UE_LOG(LogDeepLevelRoadsideBuilding, Log, TEXT("Generated %d roadside buildings."), BuildingPlacementCount);
-	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
+	if (CityLayout)
+	{
+		CityLayout->InvalidateSnapshot();
+		TSet<FIntPoint> DirtyChunks;
+		FText SnapshotError;
+		if (!CityLayout->RefreshSnapshot(DirtyChunks, SnapshotError))
+		{
+			ReportRoadsideFailure(*this, SnapshotError);
+			return;
+		}
+		CityLayout->NotifySidewalkInfillChanged();
+	}
 }
 
 void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCancelled(UPCGComponent*)
@@ -753,6 +766,7 @@ void ADeepLevelPCGRoadsideBuildingActor::OnBuildingGenerationCleaned(UPCGCompone
 	bOutputCurrent = false;
 	BuildingPlacementCount = 0;
 	GeneratedBuildings.Reset();
+	GeneratedSidewalkInfills.Reset();
 	if (CityLayout) { CityLayout->InvalidateSnapshot(); }
 	MarkPackageDirty();
 }

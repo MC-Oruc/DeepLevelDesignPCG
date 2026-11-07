@@ -50,6 +50,20 @@ For a catalog building with no assigned profile, pass `profile` as an exact long
 
 Decoration asset creation, decoration catalog editing, profile assignment and city-decoration regeneration remain outside the decoration DSL scope. No arbitrary property writes or function execution are exposed.
 
+## City output
+
+`world.configure` takes explicit `streaming` and an existing `hlodLayer` asset path. It uses native World Partition settings and assigns the decoration output layer. `reference.exclude` takes 1..256 exact hidden actor paths in the current world; it preserves the actors, disables collision and marks them editor-only. Both validate scope before mutation and support `dryRun`. They are explicit authoring operations.
+
+Mesh/decal `entry.add` and `entry.update` accept a `rendering` object: `maxDrawDistance` (integer cm), `castShadow`, `collisionProfile`, `affectNavigation`, and `decalFadeScreenSize` (0 < value <= 1). Unspecified fields retain their authored values. Actor outputs keep rendering/light policy in their own Blueprint. HISM grouping includes the rendering policy; draw distance zero means no explicit cutoff. City inspection reports loaded chunk actors and their components. Save writes the map and its external actor packages.
+
+Use `domain: "city"` with a loaded City Layout actor path as `target`. Empty operations inspect the current output; one `{"op":"decoration.regenerate"}` operation calls the City owner's existing decoration generation. It consumes registered provider records and leaves road/building generation to those domains. Use `save: true` to persist the selected City package after success. `dryRun` validates without generation or saving.
+
+The report includes HISM groups/instances, decals, child actors, lights and enabled actor/component ticks. `untrackedOutputs` lists instance output components outside the decoration component's recorded chunks, including their exact component paths and classes, for explicit authoring review. `output.removeUntracked` takes a `components` array of 1..256 exact inspected paths. Every component must be an untracked instance mesh, decal or child actor on the selected City. All paths are validated before one Undo transaction; current generated components and other actors are rejected. `dryRun` supports scope validation. Inspection performs no cleanup. City capture is separate: use a Road or Building world capture at the desired camera transform.
+
+```json
+{"version":1,"domain":"city","target":"/Game/Maps/City.City:PersistentLevel.CityLayout","operations":[{"op":"decoration.regenerate"}],"save":true}
+```
+
 ## Calls
 
 Use exact object paths returned by inspection, not asset-name guesses. A catalog inspection omits `building`:

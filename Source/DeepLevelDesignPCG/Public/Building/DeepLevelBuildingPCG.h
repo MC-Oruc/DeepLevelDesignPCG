@@ -495,6 +495,8 @@ private:
 
 	UPROPERTY()
 	TArray<FDeepLevelCityBuilding> GeneratedBuildings;
+	UPROPERTY()
+	TArray<FDeepLevelCityAnchor> GeneratedSidewalkInfills;
 	void EnsureLayoutSourceGuid();
 	void SynchronizeCityLayoutRegistration();
 	TWeakObjectPtr<ADeepLevelCityLayoutActor> RegisteredCityLayout;

@@ -16,7 +16,7 @@
 
 #define LOCTEXT_NAMESPACE "DeepLevelCityDecorationSymmetryPreview"
 
-TConstArrayView<FDeepLevelCityDecorationSymmetryPair> FDeepLevelCityBuildingDecorationEditor::GetSymmetryPairs() const
+TConstArrayView<FDeepLevelCityDecorationSymmetryPair> FDeepLevelCityDecorationWorkspace::GetSymmetryPairs() const
 {
 	const auto* Variant = Document->GetVariant();
 	return Variant ? MakeArrayView(Variant->SymmetryPairs) : TConstArrayView<FDeepLevelCityDecorationSymmetryPair>();
@@ -65,13 +65,13 @@ EAxis::Type FindNearbySymmetryAxis(const FVector& Origin, const FVector& Point, 
 }
 }
 
-FQuat FDeepLevelCityBuildingDecorationEditor::GetSymmetryPlacementBasis() const
+FQuat FDeepLevelCityDecorationWorkspace::GetSymmetryPlacementBasis() const
 {
 	return Preview->GetClient()->GetWidgetCoordSystemSpace() == COORD_Local
 		? Document->GetSelectionTransform().GetRotation() : FQuat::Identity;
 }
 
-void FDeepLevelCityBuildingDecorationEditor::RefreshSymmetryPlacement()
+void FDeepLevelCityDecorationWorkspace::RefreshSymmetryPlacement()
 {
 	if (!IsPlacingSymmetry()) { return; }
 	const auto Client = Preview->GetClient();
@@ -84,7 +84,7 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshSymmetryPlacement()
 	Client->Invalidate();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::BeginSymmetryPlacement(EAxis::Type Axis)
+void FDeepLevelCityDecorationWorkspace::BeginSymmetryPlacement(EAxis::Type Axis)
 {
 	if (!Document->CanPlaceSymmetry()) { return; }
 	Document->EndDrag();
@@ -97,7 +97,7 @@ void FDeepLevelCityBuildingDecorationEditor::BeginSymmetryPlacement(EAxis::Type 
 	RefreshSymmetryPlacement();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::ToggleSymmetryPlacementAxis(EAxis::Type Axis)
+void FDeepLevelCityDecorationWorkspace::ToggleSymmetryPlacementAxis(EAxis::Type Axis)
 {
 	if (!IsPlacingSymmetry()) { return; }
 	SymmetryPlacementAxis = SymmetryPlacementAxis.GetValue() == Axis ? EAxis::None : Axis;
@@ -105,7 +105,7 @@ void FDeepLevelCityBuildingDecorationEditor::ToggleSymmetryPlacementAxis(EAxis::
 	RefreshSymmetryPlacement();
 }
 
-bool FDeepLevelCityBuildingDecorationEditor::UpdateSymmetryPlacement(const FVector& RawCenter, const FSceneView* View, bool bFreeAxis)
+bool FDeepLevelCityDecorationWorkspace::UpdateSymmetryPlacement(const FVector& RawCenter, const FSceneView* View, bool bFreeAxis)
 {
 	if (!IsPlacingSymmetry()) { return false; }
 	const FVector Origin = Document->GetSelectionTransform().GetLocation();
@@ -142,7 +142,7 @@ bool FDeepLevelCityBuildingDecorationEditor::UpdateSymmetryPlacement(const FVect
 	return true;
 }
 
-FDeepLevelCityDecorationViewportShortcut FDeepLevelCityBuildingDecorationEditor::GetViewportShortcut(int32 Row) const
+FDeepLevelCityDecorationViewportShortcut FDeepLevelCityDecorationWorkspace::GetViewportShortcut(int32 Row) const
 {
 	if (IsPlacingSymmetry())
 	{
@@ -164,7 +164,7 @@ FDeepLevelCityDecorationViewportShortcut FDeepLevelCityBuildingDecorationEditor:
 	return {};
 }
 
-FText FDeepLevelCityBuildingDecorationEditor::GetViewportStatus() const
+FText FDeepLevelCityDecorationWorkspace::GetViewportStatus() const
 {
 	if (!Document->GetVariant()) { return FText::GetEmpty(); }
 	const FText Grid = FSnappingUtils::IsSnapToGridEnabled()
@@ -192,7 +192,7 @@ FText FDeepLevelCityBuildingDecorationEditor::GetViewportStatus() const
 	return FText::Format(LOCTEXT("DecorationViewportStatus", "{0}\n{1}\n{2}"), Selection, Space, Grid);
 }
 
-bool FDeepLevelCityBuildingDecorationEditor::CommitSymmetryPlacement()
+bool FDeepLevelCityDecorationWorkspace::CommitSymmetryPlacement()
 {
 	if (!IsPlacingSymmetry() || !SymmetryPlacementCenter.IsSet()) { return false; }
 	const FVector Center = SymmetryPlacementCenter.GetValue();
@@ -205,7 +205,7 @@ bool FDeepLevelCityBuildingDecorationEditor::CommitSymmetryPlacement()
 	return false;
 }
 
-void FDeepLevelCityBuildingDecorationEditor::CancelSymmetryPlacement()
+void FDeepLevelCityDecorationWorkspace::CancelSymmetryPlacement()
 {
 	if (!IsPlacingSymmetry()) { return; }
 	SymmetryPlacementAxis.Reset();

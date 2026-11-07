@@ -41,6 +41,17 @@
       "TargetAllowList": [
         "Editor"
       ]
+    },
+    {
+      "Name": "ZoneGraph",
+      "Enabled": true
+    },
+    {
+      "Name": "GeometryScripting",
+      "Enabled": true,
+      "TargetAllowList": [
+        "Editor"
+      ]
     }
   ]
 }

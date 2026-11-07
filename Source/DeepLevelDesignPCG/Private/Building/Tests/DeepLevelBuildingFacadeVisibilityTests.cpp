@@ -249,4 +249,24 @@ bool FDeepLevelBuildingFacadeVisibilityRoadCourtyardTest::RunTest(const FString&
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelFacadePlacementSeamsTest,
+    "DeepLevelDesignPCG.Runtime.Building.FacadeVisibility.PlacementSeams",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDeepLevelFacadePlacementSeamsTest::RunTest(const FString&)
+{
+    for (const double Yaw : {0.0,31.0})
+    {
+        auto Ring = MakeCourtyardRing(FVector(10000,-30000,0),FRotator(0,Yaw,0));
+        const FVector Offset = FRotator(0,Yaw,0).RotateVector(FVector(0,.75,0));
+        Ring[0].Transform.AddToTranslation(Offset);
+        Ring[1].Transform.AddToTranslation(-Offset);
+        TestTrue(TEXT("Subcentimeter seam topology resolves"),ResolveBuildings(Ring));
+        TestFalse(TEXT("Placement seams do not expose courtyard windows"),HasFace(Ring[2],EDeepLevelBuildingVolumeFace::NegativeX));
+        Ring[0].Transform.AddToTranslation(Offset * 20);
+        TestTrue(TEXT("Real opening topology resolves"),ResolveBuildings(Ring));
+        TestTrue(TEXT("Larger opening still exposes the courtyard"),HasFace(Ring[2],EDeepLevelBuildingVolumeFace::NegativeX));
+    }
+    return true;
+}
+
 #endif

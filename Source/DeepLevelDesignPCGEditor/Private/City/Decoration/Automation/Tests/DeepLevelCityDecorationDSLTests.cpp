@@ -84,6 +84,20 @@ bool FDeepLevelPCGDSLBatchTest::RunTest(const FString&)
 	const auto& Facades = Result.Report->GetObjectField(TEXT("state"))->GetArrayField(TEXT("variants"))[0]
 		->AsObject()->GetArrayField(TEXT("entries"))[0]->AsObject()->GetArrayField(TEXT("facade"));
 	TestEqual(TEXT("State emits explicit face names"), Facades.Num(), 2);
+	const FString RenderOnly = FString::Printf(TEXT(R"JSON([{"op":"entry.update","variant":"%s","entry":"%s","rendering":{"maxDrawDistance":9000,"castShadow":false,"collisionProfile":"NoCollision","affectNavigation":false}}])JSON"),
+		*VariantId.ToString(), *SourceId.ToString());
+	const auto Rendered = DeepLevelPCGAutomation::Execute(F.Request(RenderOnly));
+	TestTrue(TEXT("Rendering-only changes commit through the same authoring transaction"), Rendered.bSuccess && Rendered.Report->GetBoolField(TEXT("applied")));
+	TestEqual(TEXT("Rendering policy survives staging and commit"), F.Profile->Variants[0].Entries[0].Rendering.MaxDrawDistance, 9000);
+	TestFalse(TEXT("Rendering policy does not retain old shadows"), F.Profile->Variants[0].Entries[0].Rendering.bCastShadow);
+	const auto Unchanged = DeepLevelPCGAutomation::Execute(F.Request(RenderOnly));
+	TestTrue(TEXT("Identical rendering policy stays a no-op"), Unchanged.bSuccess && !Unchanged.Report->GetBoolField(TEXT("applied")));
+    const FString GroupEdit = FString::Printf(TEXT(R"JSON([{"op":"variant.update","variant":"%s","group":"NightWindows"}])JSON"), *VariantId.ToString());
+    const auto Grouped = DeepLevelPCGAutomation::Execute(F.Request(GroupEdit));
+    TestTrue(TEXT("Selection group changes use the same native document"), Grouped.bSuccess);
+    TestEqual(TEXT("Changing group preserves identity"), F.Profile->Variants[0].VariantGuid, VariantId);
+    TestEqual(TEXT("Selection group is authored"), F.Profile->Variants[0].SelectionGroup, FName(TEXT("NightWindows")));
+    TestEqual(TEXT("Inspection reports the group"), Grouped.Report->GetObjectField(TEXT("state"))->GetArrayField(TEXT("variants"))[0]->AsObject()->GetStringField(TEXT("group")), FString(TEXT("NightWindows")));
 	return true;
 }
 

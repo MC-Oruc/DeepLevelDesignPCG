@@ -243,4 +243,127 @@ bool FDeepLevelCityBuildingDecorationAuthoringTest::RunTest(const FString& Param
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelCityBuildingDecorationGroupsTest,
+    "DeepLevelDesignPCG.Editor.City.BuildingDecoration.SelectionGroups",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelCityBuildingDecorationGroupsTest::RunTest(const FString&)
+{
+    using namespace DeepLevelCityBuildingDecorationTests;
+    auto* Profile = MakeProfile();
+    auto* Set = NewObject<UDeepLevelCityDecorationSet>();
+    Set->BuildingProfiles.Add(Profile);
+    FText Error;
+    TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
+    if (!FDeepLevelCityLayoutBuilder::Build({}, {MakeBuildings()}, Snapshot, Error)) return false;
+    TArray<FDeepLevelCityResolvedDecoration> Before, After;
+    FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Before, Error);
+    auto Overlay = Profile->Variants[0];
+    Overlay.RegenerateIdentities();
+    Overlay.SelectionGroup = TEXT("NightWindows");
+    Overlay.Entries.SetNum(1);
+    Overlay.SymmetryPairs.Reset();
+    Profile->Variants.Add(Overlay);
+    TestTrue(TEXT("Independent layer resolves"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, After, Error));
+    TestEqual(TEXT("One extra decoration per building"), After.Num(), Before.Num() + 2);
+    for (const auto& Base : Before)
+    {
+        TestTrue(TEXT("Adding a group preserves base placement identities"), After.ContainsByPredicate([&](const auto& Item) { return Item.StableId == Base.StableId; }));
+    }
+    Profile->Variants.Last().SelectionWeight = 0.0;
+    TestFalse(TEXT("An all-zero layer is rejected instead of silently omitted"), Profile->Validate(Error));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelWindowResolveTest, "DeepLevelDesignPCG.Editor.City.BuildingDecoration.WindowData", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDeepLevelWindowResolveTest::RunTest(const FString&)
+{
+    using namespace DeepLevelCityBuildingDecorationTests;
+    auto* Profile = MakeProfile(); auto* Set = NewObject<UDeepLevelCityDecorationSet>(); Set->BuildingProfiles.Add(Profile);
+    auto& Entry = Profile->Variants[0].Entries[0]; Entry.bWindowLight = true; Entry.WindowColor = FLinearColor(.2,.4,.6); Entry.WindowIntensity = 3;
+    const FGuid WindowEntryId = Entry.EntryGuid;
+    Profile->CompactWindowEntries();
+    TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot; FText Error;
+    FDeepLevelCityLayoutBuilder::Build({}, {MakeBuildings()}, Snapshot, Error); TArray<FDeepLevelCityResolvedDecoration> Output;
+    TestTrue(TEXT("Window data resolves"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Output, Error));
+    for (const auto& P : Output) if (P.EntryGuid == WindowEntryId) TestTrue(TEXT("Tint and brightness are per-instance data"), P.InstanceData == TArray<float>({.2f,.4f,.6f,3.f}));
+    Profile->Variants[0].WindowStates[0].bEnabled = false; FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Output, Error);
+    TestFalse(TEXT("Disabled windows do not materialize"), Output.ContainsByPredicate([&](const auto& P) { return P.EntryGuid == WindowEntryId; }));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelRecessedDecorationTest,
+	"DeepLevelDesignPCG.Editor.City.BuildingDecoration.RecessedNeighbor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDeepLevelRecessedDecorationTest::RunTest(const FString&)
+{
+	using namespace DeepLevelCityBuildingDecorationTests;
+	auto* Profile = MakeProfile();
+	Profile->Variants[0].Entries.SetNum(1);
+	auto& Entry = Profile->Variants[0].Entries[0];
+	Entry.bWindowLight = true;
+	Entry.LocalTransform.SetLocation(FVector(2800, 20, 200));
+	Profile->CompactWindowEntries();
+	auto* Set = NewObject<UDeepLevelCityDecorationSet>();
+	Set->BuildingProfiles.Add(Profile);
+	auto Fragment = MakeBuildings();
+	const FTransform OwnerTransform = Fragment.Buildings[0].Transform;
+	auto& Neighbor = Fragment.Buildings.Emplace_GetRef();
+	Neighbor.StableId = FDeepLevelCityStableId::MakeBuildingId(Fragment.SourceGuid, FGuid(), 3);
+	Neighbor.BuildingClass = AActor::StaticClass();
+	Neighbor.FacadeGeometry.Extent = FVector(30, 20, 50);
+	Neighbor.Transform = FTransform(OwnerTransform.GetRotation(),
+		OwnerTransform.TransformPosition(FVector(2800, 20, 200)), OwnerTransform.GetScale3D());
+	FText Error;
+	TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot;
+	if (!TestTrue(TEXT("Recessed geometry builds"), FDeepLevelCityLayoutBuilder::Build({}, {Fragment}, Snapshot, Error))) return false;
+	TArray<FDeepLevelCityResolvedDecoration> Output;
+	TestTrue(TEXT("Recessed windows resolve"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Output, Error));
+	TestEqual(TEXT("Window inside neighbor omitted despite exposed projected facade"), Output.Num(), 1);
+	Profile->WindowDefinitions[0].LocalTransform.SetLocation(FVector(2800, 20, 400));
+	TestTrue(TEXT("Window above neighbor resolves"), FDeepLevelCityDecorationResolver::Resolve(*Snapshot, *Set, 77, Output, Error));
+	TestEqual(TEXT("Window above neighbor roof is preserved"), Output.Num(), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDeepLevelSharedWindowDefinitionsTest,
+    "DeepLevelDesignPCG.Editor.City.BuildingDecoration.SharedWindowDefinitions",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDeepLevelSharedWindowDefinitionsTest::RunTest(const FString&)
+{
+    using namespace DeepLevelCityBuildingDecorationTests;
+    auto* Profile = MakeProfile();
+    Profile->Variants.SetNum(1);
+    Profile->Variants[0].Entries.SetNum(1);
+    Profile->Variants[0].SelectionGroup = TEXT("NightWindows");
+    auto& Entry = Profile->Variants[0].Entries[0]; Entry.bWindowLight = true;
+    Entry.WindowIntensity = 2.f;
+    const FTransform OriginalTransform = Entry.LocalTransform;
+    const FGuid OriginalEntryId = Entry.EntryGuid;
+    auto Copy = Profile->Variants[0]; Copy.RegenerateIdentities();
+    Copy.Entries[0].bEnabled = false;
+    Copy.Entries[0].WindowColor = FLinearColor(.8f,.9f,1.f);
+    Profile->Variants.Add(Copy);
+    Profile->CompactWindowEntries();
+    TestEqual(TEXT("Two arrangements share one geometry definition"), Profile->WindowDefinitions.Num(),1);
+    TestTrue(TEXT("Geometry leaves both variant entry arrays"), Profile->Variants[0].Entries.IsEmpty() && Profile->Variants[1].Entries.IsEmpty());
+    TestEqual(TEXT("Each variant stores one window state"), Profile->Variants[0].WindowStates.Num(),1);
+    TestEqual(TEXT("Both states reference the same window"),Profile->Variants[0].WindowStates[0].WindowGuid,Profile->Variants[1].WindowStates[0].WindowGuid);
+    auto First = Profile->BuildVariantView(Profile->Variants[0]);
+    auto Second = Profile->BuildVariantView(Profile->Variants[1]);
+    TestEqual(TEXT("State identity is preserved"),First.Entries[0].EntryGuid,OriginalEntryId);
+    TestTrue(TEXT("Migration preserves placement"),First.Entries[0].LocalTransform.Equals(OriginalTransform));
+    TestTrue(TEXT("Variants preserve distinct active state"),First.Entries[0].bEnabled && !Second.Entries[0].bEnabled);
+    TestEqual(TEXT("Variants preserve appearance"),Second.Entries[0].WindowColor,Copy.Entries[0].WindowColor);
+    Profile->WindowDefinitions[0].LocalTransform.AddToTranslation(FVector(5,0,0));
+    First = Profile->BuildVariantView(Profile->Variants[0]); Second = Profile->BuildVariantView(Profile->Variants[1]);
+    TestTrue(TEXT("One geometry edit updates all arrangements"),First.Entries[0].LocalTransform.Equals(Second.Entries[0].LocalTransform));
+    FText Error;
+    TestTrue(TEXT("Shared definition profile validates"),Profile->Validate(Error));
+    Profile->Variants[1].WindowStates[0].WindowGuid = FGuid::NewGuid();
+    TestFalse(TEXT("Dangling window reference is rejected"),Profile->Validate(Error));
+    return true;
+}
+
 #endif

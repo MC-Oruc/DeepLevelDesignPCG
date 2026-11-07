@@ -12,6 +12,7 @@ public class DeepLevelDesignPCGEditor : ModuleRules
             new[]
             {
                 "AdvancedPreviewScene",
+                "GeometryScriptingCore", "GeometryScriptingEditor", "GeometryCore", "GeometryFramework",
                 "AssetRegistry",
                 "AssetTools",
                 "ComponentVisualizers",
@@ -19,8 +20,10 @@ public class DeepLevelDesignPCGEditor : ModuleRules
                 "Core",
                 "CoreUObject",
                 "DeepLevelDesignPCG",
+                "ZoneGraph",
                 "EditorStyle",
                 "Engine",
+                "GameplayTags",
                 "InputCore",
                 "ImageWrapper",
                 "Json",

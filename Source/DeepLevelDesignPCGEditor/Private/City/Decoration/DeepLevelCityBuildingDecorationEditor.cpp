@@ -19,6 +19,9 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityBuildingDecorationEditor)
 #define LOCTEXT_NAMESPACE "DeepLevelCityBuildingDecorationEditor"
 
+const FName FDeepLevelCityBuildingDecorationEditor::WindowsTab(TEXT("DeepLevelCityWindowLighting"));
+const FName FDeepLevelCityBuildingDecorationEditor::StreetsTab(TEXT("DeepLevelCityStreetDecoration"));
+
 const FName FDeepLevelCityBuildingDecorationEditor::WorkspaceTab(TEXT("DeepLevelCityBuildingDecorationWorkspace"));
 const FName FDeepLevelCityBuildingDecorationEditor::EnvironmentTab(TEXT("DeepLevelCityBuildingDecorationEnvironment"));
 
@@ -36,12 +39,14 @@ void FDeepLevelCityDecorationSetAssetActions::OpenAssetEditor(const TArray<UObje
 	}
 }
 
-FDeepLevelCityBuildingDecorationEditor::~FDeepLevelCityBuildingDecorationEditor()
+FDeepLevelCityDecorationWorkspace::~FDeepLevelCityDecorationWorkspace()
 {
 	if (Document) { Document->Shutdown(); }
 }
 
-void FDeepLevelCityBuildingDecorationEditor::InitEditor(EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host, UDeepLevelCityDecorationSet* Set)
+FDeepLevelCityBuildingDecorationEditor::~FDeepLevelCityBuildingDecorationEditor() = default;
+
+void FDeepLevelCityDecorationWorkspace::InitWorkspace(UDeepLevelCityDecorationSet* Set)
 {
 	check(Set);
 	Document = MakeUnique<FDeepLevelCityDecorationDocument>();
@@ -56,24 +61,58 @@ void FDeepLevelCityBuildingDecorationEditor::InitEditor(EToolkitMode::Type Mode,
 	Args.bHideSelectionTip = true;
 	Args.bAllowMultipleTopLevelObjects = false;
 	Inspector = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor")).CreateDetailView(Args);
-	Inspector->SetIsPropertyVisibleDelegate(FIsPropertyVisible::CreateLambda([](const FPropertyAndParent& Property)
+	Inspector->SetIsPropertyVisibleDelegate(FIsPropertyVisible::CreateLambda([this](const FPropertyAndParent& Property)
 	{
-		return Property.Property.GetFName() != GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry, EntryGuid);
+		if (Property.Property.GetOwnerClass() == UDeepLevelCityBuildingDecorationProfile::StaticClass())
+            return Property.Property.GetFName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityBuildingDecorationProfile, WindowMaterial)
+                || Property.Property.GetFName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityBuildingDecorationProfile, WindowAppearances)
+                || Property.Property.GetFName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityBuildingDecorationProfile, WindowDefinitions);
+        const FName Name = Property.Property.GetFName();
+        if (Property.Property.GetOwnerStruct() == FDeepLevelCityBuildingDecorationEntry::StaticStruct())
+        {
+            if (bWindowLightingMode)
+                return Name == GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,bEnabled)
+                    || Name == GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,WindowColor)
+                    || Name == GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,WindowIntensity)
+                    || Name == GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,WindowMaterialOverride);
+            return Name != GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,EntryGuid)
+                && Name != GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,WindowDefinitionGuid)
+                && Name != GET_MEMBER_NAME_CHECKED(FDeepLevelCityBuildingDecorationEntry,WindowRoomGuid);
+        }
+        return true;
 	}));
-	Inspector->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::CanEditInspector));
-	Inspector->OnFinishedChangingProperties().AddSP(this, &FDeepLevelCityBuildingDecorationEditor::CommitInspector);
+	Inspector->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateSP(this, &FDeepLevelCityDecorationWorkspace::CanEditInspector));
+	Inspector->OnFinishedChangingProperties().AddSP(this, &FDeepLevelCityDecorationWorkspace::CommitInspector);
 	SAssignNew(Preview, SDeepLevelCityBuildingDecorationViewport).Editor(SharedThis(this));
-	const auto Layout = FTabManager::NewLayout(TEXT("DeepLevelCityBuildingDecoration_v2"))
+	WorkspaceWidget = BuildWorkspace();
+}
+
+void FDeepLevelCityBuildingDecorationEditor::InitEditor(EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host, UDeepLevelCityDecorationSet* Set)
+{
+    Buildings = MakeShared<FDeepLevelCityDecorationWorkspace>();
+    Windows = MakeShared<FDeepLevelCityDecorationWorkspace>();
+    Buildings->Toolkit = SharedThis(this); Windows->Toolkit = SharedThis(this);
+    Buildings->InitWorkspace(Set); Windows->InitWorkspace(Set);
+    Windows->Preview->GetPreviewScene()->SetEnvironmentVisibility(false);
+    Windows->Preview->GetPreviewScene()->SetLightBrightness(.15f);
+    Windows->Preview->GetPreviewScene()->SetSkyBrightness(.08f);
+
+	const auto Layout = FTabManager::NewLayout(TEXT("DeepLevelCityBuildingDecoration_v6"))
 		->AddArea(FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
-			->Split(FTabManager::NewStack()->SetSizeCoefficient(0.8f)->AddTab(WorkspaceTab, ETabState::OpenedTab)->SetHideTabWell(true))
+			->Split(FTabManager::NewStack()->SetSizeCoefficient(0.8f)->AddTab(WorkspaceTab, ETabState::OpenedTab)->AddTab(WindowsTab, ETabState::OpenedTab)->AddTab(StreetsTab, ETabState::OpenedTab)->SetForegroundTab(WorkspaceTab)->SetHideTabWell(false))
 			->Split(FTabManager::NewStack()->SetSizeCoefficient(0.2f)->AddTab(EnvironmentTab, ETabState::ClosedTab)));
 	InitAssetEditor(Mode, Host, TEXT("DeepLevelCityBuildingDecorationEditor"), Layout, true, true, Set);
-	Document->OnChanged.AddSP(this, &FDeepLevelCityBuildingDecorationEditor::DocumentChanged);
-	DocumentChanged(EDeepLevelCityDecorationChange::Context, {});
+	Buildings->Document->OnChanged.AddSP(Buildings.Get(), &FDeepLevelCityDecorationWorkspace::DocumentChanged);
+    Windows->Document->OnChanged.AddSP(Windows.Get(), &FDeepLevelCityDecorationWorkspace::DocumentChanged);
+    Windows->Preview->SetPlacementGuide(Windows->Document->GetBuildingDefinition(), false);
+    Windows->SetWindowLightingMode(true);
+    Windows->DocumentChanged(EDeepLevelCityDecorationChange::Context, {});
+    GetTabManager()->TryInvokeTab(WorkspaceTab);
+	Buildings->DocumentChanged(EDeepLevelCityDecorationChange::Context, {});
 	RegenerateMenusAndToolbars();
 }
 
-FText FDeepLevelCityBuildingDecorationEditor::GetBaseToolkitName() const { return LOCTEXT("Toolkit", "Building Decoration"); }
+FText FDeepLevelCityBuildingDecorationEditor::GetBaseToolkitName() const { return LOCTEXT("Toolkit", "City Decoration"); }
 
 FText FDeepLevelCityBuildingDecorationEditor::GetToolkitName() const
 {
@@ -98,7 +137,11 @@ void FDeepLevelCityBuildingDecorationEditor::RegisterTabSpawners(const TSharedRe
 {
 	FAssetEditorToolkit::RegisterTabSpawners(Manager);
 	Manager->RegisterTabSpawner(WorkspaceTab, FOnSpawnTab::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::SpawnWorkspace))
-		.SetDisplayName(LOCTEXT("Workspace", "Building Decoration"));
+		.SetDisplayName(LOCTEXT("Workspace", "Building Decorations"));
+    Manager->RegisterTabSpawner(WindowsTab, FOnSpawnTab::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::SpawnWindows))
+        .SetDisplayName(LOCTEXT("Windows", "Window Lighting"));
+	Manager->RegisterTabSpawner(StreetsTab, FOnSpawnTab::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::SpawnStreets))
+		.SetDisplayName(LOCTEXT("Streets", "Streets & Sidewalks"));
 	Manager->RegisterTabSpawner(EnvironmentTab, FOnSpawnTab::CreateSP(this, &FDeepLevelCityBuildingDecorationEditor::SpawnEnvironment))
 		.SetDisplayName(LOCTEXT("Environment", "Preview Environment"));
 }
@@ -106,11 +149,13 @@ void FDeepLevelCityBuildingDecorationEditor::RegisterTabSpawners(const TSharedRe
 void FDeepLevelCityBuildingDecorationEditor::UnregisterTabSpawners(const TSharedRef<FTabManager>& Manager)
 {
 	Manager->UnregisterTabSpawner(WorkspaceTab);
+    Manager->UnregisterTabSpawner(WindowsTab);
 	Manager->UnregisterTabSpawner(EnvironmentTab);
+	Manager->UnregisterTabSpawner(StreetsTab);
 	FAssetEditorToolkit::UnregisterTabSpawners(Manager);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::AddReferencedObjects(FReferenceCollector& Collector)
+void FDeepLevelCityDecorationWorkspace::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	Collector.AddReferencedObject(VariantProxy);
 	Collector.AddReferencedObject(EntryProxy);
@@ -121,15 +166,28 @@ void FDeepLevelCityBuildingDecorationEditor::AddReferencedObjects(FReferenceColl
 
 TSharedRef<SDockTab> FDeepLevelCityBuildingDecorationEditor::SpawnWorkspace(const FSpawnTabArgs&)
 {
-	return SNew(SDockTab).TabRole(ETabRole::PanelTab)[BuildWorkspace()];
+    return SNew(SDockTab).TabRole(ETabRole::PanelTab).CanEverClose(false)[Buildings->WorkspaceWidget.ToSharedRef()];
+}
+
+TSharedRef<SDockTab> FDeepLevelCityBuildingDecorationEditor::SpawnWindows(const FSpawnTabArgs&)
+{
+    return SNew(SDockTab).TabRole(ETabRole::PanelTab).CanEverClose(false)[Windows->WorkspaceWidget.ToSharedRef()];
+}
+
+FReply FDeepLevelCityDecorationWorkspace::ShowWindowSettings()
+{
+    bWindowSettings = true;
+    bSetSettings = false;
+    RefreshInspector();
+    return FReply::Handled();
 }
 
 TSharedRef<SDockTab> FDeepLevelCityBuildingDecorationEditor::SpawnEnvironment(const FSpawnTabArgs&)
 {
-	return SNew(SDockTab).TabRole(ETabRole::PanelTab)[SNew(SAdvancedPreviewDetailsTab, Preview->GetPreviewScene())];
+	return SNew(SDockTab).TabRole(ETabRole::PanelTab)[SNew(SAdvancedPreviewDetailsTab, Buildings->Preview->GetPreviewScene())];
 }
 
-void FDeepLevelCityBuildingDecorationEditor::DocumentChanged(EDeepLevelCityDecorationChange Change, FGuid Entry)
+void FDeepLevelCityDecorationWorkspace::DocumentChanged(EDeepLevelCityDecorationChange Change, FGuid Entry)
 {
 	CancelSymmetryPlacement();
 	if (Document->IsDragging() && Change == EDeepLevelCityDecorationChange::Transform)
@@ -144,9 +202,11 @@ void FDeepLevelCityBuildingDecorationEditor::DocumentChanged(EDeepLevelCityDecor
 	OperationError = FText::GetEmpty();
 	for (const UObject* Asset : { static_cast<const UObject*>(Document->GetSet()), static_cast<const UObject*>(Document->GetProfile()) })
 	{
-		if (Asset && !GetEditingObjects().Contains(Asset)) { AddEditingObject(const_cast<UObject*>(Asset)); }
+        if (auto Root = Toolkit.Pin(); Root && Asset && !Root->GetEditingObjects().Contains(Asset)) Root->AddEditingObject(const_cast<UObject*>(Asset));
 	}
-	if (Change == EDeepLevelCityDecorationChange::Context) { bSetSettings = false; }
+	if (Change == EDeepLevelCityDecorationChange::Context || Change == EDeepLevelCityDecorationChange::Selection) { bWindowSettings = false; }
+    if (Change == EDeepLevelCityDecorationChange::Context) { bSetSettings = false; }
+    if (const auto* Selected = Document->GetVariant(); Selected && Selected->SelectionGroup.IsNone()) PreviewBaseVariant = Selected->VariantGuid;
 	if (Change != EDeepLevelCityDecorationChange::Selection && Change != EDeepLevelCityDecorationChange::Transform) { RefreshOutline(); }
 	RefreshInspector();
 	SynchronizeOutlineSelection();
@@ -160,16 +220,18 @@ void FDeepLevelCityBuildingDecorationEditor::DocumentChanged(EDeepLevelCityDecor
 	}
 	else if (Change != EDeepLevelCityDecorationChange::Selection && Change != EDeepLevelCityDecorationChange::Metadata)
 	{
-		Preview->Synchronize(Document->GetBuildingClass(), Document->GetProfile(), Document->GetVariantId());
+		Preview->Synchronize(Document->GetBuildingClass(), Document->GetProfile(), Document->GetVariantId(), bWindowLightingMode ? PreviewBaseVariant : FGuid());
 	}
 	Preview->GetClient()->Invalidate();
 	RefreshIssues();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::RefreshInspector()
+void FDeepLevelCityDecorationWorkspace::RefreshInspector()
 {
 	UObject* Object = nullptr;
-	if (bSetSettings && Document->GetSet())
+	if (bWindowSettings && Document->GetProfile())
+    { Object = const_cast<UDeepLevelCityBuildingDecorationProfile*>(Document->GetProfile()); }
+	else if (bSetSettings && Document->GetSet())
 	{
 		SetProxy->Categories = Document->GetSet()->Categories;
 		SetProxy->BuildingProfiles = Document->GetSet()->BuildingProfiles;
@@ -195,6 +257,7 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshInspector()
 	{
 		VariantProxy->Name = Variant->Name;
 		VariantProxy->SelectionWeight = Variant->SelectionWeight;
+		VariantProxy->SelectionGroup = Variant->SelectionGroup;
 		Object = VariantProxy;
 	}
 	else if (const auto* Definition = Document->GetBuildingDefinition())
@@ -209,9 +272,9 @@ void FDeepLevelCityBuildingDecorationEditor::RefreshInspector()
 	Inspector->SetObject(Object, true);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::CommitInspector(const FPropertyChangedEvent& Event)
+void FDeepLevelCityDecorationWorkspace::CommitInspector(const FPropertyChangedEvent& Event)
 {
-	if (bRefreshing) { return; }
+	if (bRefreshing || bWindowSettings) { return; }
 	FText Error;
 	if (bSetSettings)
 	{
@@ -244,22 +307,32 @@ void FDeepLevelCityBuildingDecorationEditor::CommitInspector(const FPropertyChan
 	{
 		if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationVariantProxy, Name))
 		{
-			Document->SetVariantFields(VariantProxy->Name, Variant->SelectionWeight);
+			Document->SetVariantFields(VariantProxy->Name, Variant->SelectionWeight, Variant->SelectionGroup);
 		}
+        else if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationVariantProxy, SelectionGroup))
+        {
+            Document->SetVariantFields(Variant->Name, Variant->SelectionWeight, VariantProxy->SelectionGroup);
+        }
 		else if (Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UDeepLevelCityDecorationVariantProxy, SelectionWeight))
 		{
-			Document->SetVariantFields(Variant->Name, VariantProxy->SelectionWeight);
+			Document->SetVariantFields(Variant->Name, VariantProxy->SelectionWeight, Variant->SelectionGroup);
 		}
 	}
 	RefreshIssues();
 }
 
+void FDeepLevelCityDecorationWorkspace::ChooseSet(const FAssetData& Asset)
+{
+    if (auto Root = Toolkit.Pin()) Root->ChooseSet(Asset);
+}
 void FDeepLevelCityBuildingDecorationEditor::ChooseSet(const FAssetData& Asset)
 {
-	Document->Open(Cast<UDeepLevelCityDecorationSet>(Asset.GetAsset()), const_cast<UDeepLevelCityBuildingDecorationProfile*>(Document->GetProfile()));
+    Buildings->Document->Open(Cast<UDeepLevelCityDecorationSet>(Asset.GetAsset()), const_cast<UDeepLevelCityBuildingDecorationProfile*>(Buildings->Document->GetProfile()));
+    Windows->Document->Open(Cast<UDeepLevelCityDecorationSet>(Asset.GetAsset()));
+    Windows->SetWindowLightingMode(true);
 }
-void FDeepLevelCityBuildingDecorationEditor::ChooseCatalog(const FAssetData& Asset) { Document->SetCatalog(Cast<UDeepLevelBuildingPlacementCatalog>(Asset.GetAsset())); }
-void FDeepLevelCityBuildingDecorationEditor::AttachProfile(const FAssetData& Asset)
+void FDeepLevelCityDecorationWorkspace::ChooseCatalog(const FAssetData& Asset) { Document->SetCatalog(Cast<UDeepLevelBuildingPlacementCatalog>(Asset.GetAsset())); }
+void FDeepLevelCityDecorationWorkspace::AttachProfile(const FAssetData& Asset)
 {
 	if (!Document->AttachProfile(Cast<UDeepLevelCityBuildingDecorationProfile>(Asset.GetAsset())))
 	{
@@ -268,7 +341,7 @@ void FDeepLevelCityBuildingDecorationEditor::AttachProfile(const FAssetData& Ass
 	}
 }
 
-FReply FDeepLevelCityBuildingDecorationEditor::CreateProfile()
+FReply FDeepLevelCityDecorationWorkspace::CreateProfile()
 {
 	if (!Document->CanCreateProfile()) { return FReply::Handled(); }
 	auto* Factory = NewObject<UDataAssetFactory>();
@@ -287,7 +360,7 @@ FReply FDeepLevelCityBuildingDecorationEditor::CreateProfile()
 	return FReply::Handled();
 }
 
-FReply FDeepLevelCityBuildingDecorationEditor::UnlinkProfile()
+FReply FDeepLevelCityDecorationWorkspace::UnlinkProfile()
 {
 	const auto* Set = Document->GetSet();
 	const auto* Profile = Document->GetProfile();
@@ -295,7 +368,7 @@ FReply FDeepLevelCityBuildingDecorationEditor::UnlinkProfile()
 	return FReply::Handled();
 }
 
-FReply FDeepLevelCityBuildingDecorationEditor::UnlinkIssue(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Issue)
+FReply FDeepLevelCityDecorationWorkspace::UnlinkIssue(TSharedPtr<FDeepLevelCityDecorationDocumentIssue> Issue)
 {
 	if (Issue && !Document->RemoveAssignment(Issue->AssignmentSet.Get(), Issue->AssignmentIndex, Issue->AssignmentProfile.Get()))
 	{
@@ -305,7 +378,7 @@ FReply FDeepLevelCityBuildingDecorationEditor::UnlinkIssue(TSharedPtr<FDeepLevel
 	return FReply::Handled();
 }
 
-FReply FDeepLevelCityBuildingDecorationEditor::ShowSetSettings()
+FReply FDeepLevelCityDecorationWorkspace::ShowSetSettings()
 {
 	Document->EndDrag();
 	Document->SelectEntry({});
@@ -314,7 +387,7 @@ FReply FDeepLevelCityBuildingDecorationEditor::ShowSetSettings()
 	return FReply::Handled();
 }
 
-bool FDeepLevelCityBuildingDecorationEditor::AddDroppedAssets(const TArray<FAssetData>& Assets, const FVector& Location, const FVector& Normal)
+bool FDeepLevelCityDecorationWorkspace::AddDroppedAssets(const TArray<FAssetData>& Assets, const FVector& Location, const FVector& Normal)
 {
 	if (!HasVariant() || Assets.IsEmpty())
 	{
@@ -327,6 +400,12 @@ bool FDeepLevelCityBuildingDecorationEditor::AddDroppedAssets(const TArray<FAsse
 	{
 		FDeepLevelCityBuildingDecorationEntry Entry;
 		if (!DeepLevelCityDecorationAuthoring::MakeEntryFromAsset(Asset.GetAsset(), Entry, OperationError)) { RefreshIssues(); return false; }
+        if (bWindowLightingMode && Entry.Output == EDeepLevelCityDecorationOutput::Mesh)
+        {
+            Entry.bWindowLight = true;
+            Entry.Rendering.bCastShadow = false; Entry.Rendering.bAffectNavigation = false;
+            Entry.Rendering.CollisionProfile = TEXT("NoCollision"); Entry.Rendering.MaxDrawDistance = 16000;
+        }
 		Entry.LocalTransform.SetLocation(Location);
 		if (Entry.Output == EDeepLevelCityDecorationOutput::Decal) { Entry.LocalTransform.SetRotation(FRotationMatrix::MakeFromX(-Normal).ToQuat()); }
 		Definitions.Add(Entry);
@@ -335,7 +414,7 @@ bool FDeepLevelCityBuildingDecorationEditor::AddDroppedAssets(const TArray<FAsse
 	return true;
 }
 
-void FDeepLevelCityBuildingDecorationEditor::SelectEntry(const FGuid& Id, bool bToggle, bool bAdd)
+void FDeepLevelCityDecorationWorkspace::SelectEntry(const FGuid& Id, bool bToggle, bool bAdd)
 {
 	bSetSettings = false;
 	if ((bToggle || bAdd) && Id.IsValid())
@@ -349,13 +428,13 @@ void FDeepLevelCityBuildingDecorationEditor::SelectEntry(const FGuid& Id, bool b
 	RefreshInspector();
 }
 
-bool FDeepLevelCityBuildingDecorationEditor::IsSurfacePlacementEnabled() const
+bool FDeepLevelCityDecorationWorkspace::IsSurfacePlacementEnabled() const
 {
 	return GetDefault<ULevelEditorViewportSettings>()->SnapToSurface.bEnabled && Document->CanEdit()
 		&& !Document->IsSymmetryPivotSelected() && Document->GetSelectedEntryIds().Num() == 1;
 }
 
-void FDeepLevelCityBuildingDecorationEditor::ApplyWidgetDelta(const FVector& Drag, const FRotator& Rotation,
+void FDeepLevelCityDecorationWorkspace::ApplyWidgetDelta(const FVector& Drag, const FRotator& Rotation,
 	const FVector& Scale, const FHitResult* SurfaceHit)
 {
 	const auto* Entry = Document->GetEntry();
@@ -377,7 +456,7 @@ void FDeepLevelCityBuildingDecorationEditor::ApplyWidgetDelta(const FVector& Dra
 	Document->ApplyDragTransform(Transform);
 }
 
-void FDeepLevelCityBuildingDecorationEditor::PlaceSelectedOnSurface(const FVector& Location, const FVector& Normal)
+void FDeepLevelCityDecorationWorkspace::PlaceSelectedOnSurface(const FVector& Location, const FVector& Normal)
 {
 	const auto* Entry = Document->GetEntry();
 	if (!Entry) { return; }
@@ -390,14 +469,14 @@ void FDeepLevelCityBuildingDecorationEditor::PlaceSelectedOnSurface(const FVecto
 	FText Error;
 	if (!Document->SetTransform(Transform, Error)) { OperationError = Error; RefreshIssues(); }
 }
-void FDeepLevelCityBuildingDecorationEditor::SetWidgetMode(UE::Widget::EWidgetMode Mode)
+void FDeepLevelCityDecorationWorkspace::SetWidgetMode(UE::Widget::EWidgetMode Mode)
 {
 	Document->EndDrag();
 	Preview->GetClient()->SetWidgetMode(Mode);
 	Preview->GetClient()->Invalidate();
 }
 
-void FDeepLevelCityBuildingDecorationEditor::BindViewportCommands(FUICommandList& Commands)
+void FDeepLevelCityDecorationWorkspace::BindViewportCommands(FUICommandList& Commands)
 {
 	const auto Map = [&](const TSharedPtr<FUICommandInfo>& Command, TFunction<void()> Execute, TFunction<bool()> CanExecute)
 	{
@@ -424,13 +503,13 @@ void FDeepLevelCityBuildingDecorationEditor::BindViewportCommands(FUICommandList
 	Map(Viewport.ScaleMode, [this] { SetWidgetMode(UE::Widget::WM_Scale); }, [this] { return HasEntry(); });
 }
 
-void FDeepLevelCityBuildingDecorationEditor::ReportPreviewError(const FText& Error, FGuid Entry)
+void FDeepLevelCityDecorationWorkspace::ReportPreviewError(const FText& Error, FGuid Entry)
 {
 	PreviewErrors.Add(Entry, Error);
 	if (!bRefreshing) { RefreshIssues(); }
 }
 
-FString FDeepLevelCityBuildingDecorationEditor::GetSetPath() const { return Document->GetSet() ? Document->GetSet()->GetPathName() : FString(); }
-FString FDeepLevelCityBuildingDecorationEditor::GetCatalogPath() const { return Document->GetCatalog() ? Document->GetCatalog()->GetPathName() : FString(); }
+FString FDeepLevelCityDecorationWorkspace::GetSetPath() const { return Document->GetSet() ? Document->GetSet()->GetPathName() : FString(); }
+FString FDeepLevelCityDecorationWorkspace::GetCatalogPath() const { return Document->GetCatalog() ? Document->GetCatalog()->GetPathName() : FString(); }
 
 #undef LOCTEXT_NAMESPACE

@@ -5,6 +5,7 @@
 #include "Building/DeepLevelBuildingPreviewPresentation.h"
 #include "Components/DecalComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "DragAndDrop/AssetDragDropOp.h"
 #include "Editor.h"
 #include "CanvasTypes.h"
@@ -43,7 +44,7 @@ IMPLEMENT_HIT_PROXY(HDeepLevelCityDecorationPivot, HHitProxy);
 
 
 FDeepLevelCityBuildingDecorationViewportClient::FDeepLevelCityBuildingDecorationViewportClient(
-	const TSharedRef<FAdvancedPreviewScene>& Scene, const TSharedRef<SEditorViewport>& ViewportWidget, TWeakPtr<FDeepLevelCityBuildingDecorationEditor> InEditor)
+	const TSharedRef<FAdvancedPreviewScene>& Scene, const TSharedRef<SEditorViewport>& ViewportWidget, TWeakPtr<FDeepLevelCityDecorationWorkspace> InEditor)
 	: FEditorViewportClient(nullptr, &Scene.Get(), ViewportWidget), SceneOwner(Scene), Editor(InEditor)
 {
 	bSetListenerPosition = false;
@@ -378,6 +379,24 @@ AActor* SDeepLevelCityBuildingDecorationViewport::SpawnEntry(const FDeepLevelCit
 	switch (Entry.Output)
 	{
 	case EDeepLevelCityDecorationOutput::Mesh:
+        if (Entry.bWindowLight)
+        {
+            AActor* Actor = Spawn(AActor::StaticClass(), Entry.LocalTransform);
+            if (!Actor) return nullptr;
+            auto* Mesh = NewObject<UInstancedStaticMeshComponent>(Actor);
+            Actor->SetRootComponent(Mesh);
+            Actor->AddInstanceComponent(Mesh);
+            Mesh->SetStaticMesh(Entry.Mesh.LoadSynchronous());
+            if (auto* Material = Entry.WindowMaterialOverride.LoadSynchronous()) Mesh->SetMaterial(0, Material);
+            Mesh->SetMobility(EComponentMobility::Movable);
+            Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Mesh->SetCastShadow(false);
+            Mesh->NumCustomDataFloats = 4;
+            Mesh->RegisterComponent();
+            Actor->SetActorTransform(Entry.LocalTransform);
+            Mesh->AddInstance(FTransform::Identity);
+            return Actor;
+        }
 		if (auto* Actor = Cast<AStaticMeshActor>(Spawn(AStaticMeshActor::StaticClass(), Entry.LocalTransform)))
 		{
 			Actor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
@@ -402,7 +421,7 @@ AActor* SDeepLevelCityBuildingDecorationViewport::SpawnEntry(const FDeepLevelCit
 }
 
 void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<AActor>& BuildingClass,
-	const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId)
+	const UDeepLevelCityBuildingDecorationProfile* Profile, const FGuid& VariantId, const FGuid BaseVariant)
 {
 	const auto Pinned = Editor.Pin();
 	if (Pinned) { Pinned->ClearPreviewErrors(); }
@@ -419,11 +438,19 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 			Pinned->ReportPreviewError(LOCTEXT("BuildingSpawn", "Cannot create the selected building preview."));
 		}
 	}
-	const auto* Variant = Profile && VariantId.IsValid() ? DeepLevelCityDecorationAuthoring::FindVariant(*Profile, VariantId) : nullptr;
-	TSet<FGuid> Active;
-	if (Variant)
+	const auto* StoredVariant = Profile && VariantId.IsValid() ? DeepLevelCityDecorationAuthoring::FindVariant(*Profile, VariantId) : nullptr;
+    const auto View = StoredVariant ? Profile->BuildVariantView(*StoredVariant) : FDeepLevelCityBuildingDecorationVariant();
+    const auto* Variant = StoredVariant ? &View : nullptr;
+    TArray<FDeepLevelCityBuildingDecorationEntry> DisplayEntries;
+    if (Variant) DisplayEntries = Variant->Entries;
+    if (Profile && BaseVariant.IsValid() && BaseVariant != VariantId)
+    {
+        if (const auto* Base = DeepLevelCityDecorationAuthoring::FindVariant(*Profile, BaseVariant)) DisplayEntries.Append(Profile->BuildVariantView(*Base).Entries);
+    }
+    TSet<FGuid> Active;
+    if (Variant)
 	{
-		for (const auto& Entry : Variant->Entries)
+		for (const auto& Entry : DisplayEntries)
 		{
 			FText Error;
 			if (!Entry.EntryGuid.IsValid() || Active.Contains(Entry.EntryGuid)) { continue; }
@@ -431,7 +458,7 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 			Active.Add(Entry.EntryGuid);
 			const auto* Old = PreviewEntries.Find(Entry.EntryGuid);
 			AActor* Actor = GetEntryActor(Entry.EntryGuid);
-			const bool bSameOutput = Old && Old->Output == Entry.Output && Old->Mesh == Entry.Mesh
+			const bool bSameOutput = Old && Old->bWindowLight == Entry.bWindowLight && Old->WindowMaterialOverride == Entry.WindowMaterialOverride && Old->Output == Entry.Output && Old->Mesh == Entry.Mesh
 				&& Old->ActorClass == Entry.ActorClass && Old->DecalMaterial == Entry.DecalMaterial;
 			if (Actor && !bSameOutput)
 			{
@@ -467,6 +494,18 @@ void SDeepLevelCityBuildingDecorationViewport::Synchronize(const TSoftClassPtr<A
 					Decal->GetDecal()->UpdateBounds();
 				}
 			}
+            if (Actor)
+            {
+                Actor->SetIsTemporarilyHiddenInEditor(!Entry.bEnabled);
+                if (Entry.bWindowLight)
+                {
+                    if (auto* Mesh = Actor->FindComponentByClass<UInstancedStaticMeshComponent>())
+                    {
+                        const TArray<float> Data{Entry.WindowColor.R, Entry.WindowColor.G, Entry.WindowColor.B, Entry.WindowIntensity};
+                        Mesh->SetCustomData(0, Data, true);
+                    }
+                }
+            }
 			PreviewEntries.Add(Entry.EntryGuid, Entry);
 		}
 	}

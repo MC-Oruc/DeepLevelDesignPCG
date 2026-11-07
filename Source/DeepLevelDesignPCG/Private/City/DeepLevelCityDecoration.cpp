@@ -7,6 +7,7 @@
 #include "City/Decoration/DeepLevelCityDecorationValidation.h"
 #include "Serialization/BufferArchive.h"
 #include "Misc/SecureHash.h"
+#include "UObject/GarbageCollection.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DeepLevelCityDecoration)
 
@@ -16,11 +17,32 @@
 #include "Components/DecalComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#if WITH_EDITOR
+#include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/WorldPartitionHandle.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "DeepLevelCityDecoration"
 
 namespace
 {
+    struct FDecorationMeshKey
+    {
+        FSoftObjectPath Mesh;
+        FSoftObjectPath Material;
+        FDeepLevelCityDecorationRendering Rendering;
+        int32 CustomFloats = 0;
+        bool operator==(const FDecorationMeshKey& Other) const
+        { return Mesh == Other.Mesh && Material == Other.Material && Rendering == Other.Rendering && CustomFloats == Other.CustomFloats; }
+        friend uint32 GetTypeHash(const FDecorationMeshKey& Key)
+        { return HashCombineFast(HashCombineFast(GetTypeHash(Key.Mesh), GetTypeHash(Key.Material)), HashCombineFast(GetTypeHash(Key.Rendering), GetTypeHash(Key.CustomFloats))); }
+    };
+#if WITH_EDITOR
+	FName OutputOwnerTag(const AActor& Actor)
+	{
+		return FName(*(TEXT("CityDecorationOwner_") + Actor.GetActorGuid().ToString(EGuidFormats::Digits)));
+	}
+#endif
 	bool DecorationHasRequiredOccupancy(
 		const FDeepLevelCityLayoutSnapshot& Snapshot,
 		const FDeepLevelCityAnchor& Anchor,
@@ -135,6 +157,13 @@ namespace
 			FVector Size = Placement.DecalSize;
 			FTransform Transform = Placement.Transform;
 			Bytes << Id << Output << Mesh << Actor << Material << Size << Transform;
+			FString MaterialOverride = Placement.MaterialOverride.ToSoftObjectPath().ToString();
+            Bytes << MaterialOverride;
+            TArray<float> InstanceData = Placement.InstanceData;
+			Bytes << InstanceData;
+			FDeepLevelCityDecorationRendering Rendering = Placement.Rendering;
+			Bytes << Rendering.MaxDrawDistance << Rendering.bCastShadow << Rendering.CollisionProfile
+				<< Rendering.bAffectNavigation << Rendering.DecalFadeScreenSize;
 		}
 		FMD5 Hash;
 		Hash.Update(Bytes.GetData(), Bytes.Num());
@@ -147,6 +176,11 @@ namespace
 	{
 		for (const auto& Placement : Placements)
 		{
+			if (!Placement.Rendering.IsValid())
+			{
+				OutError = LOCTEXT("InvalidRenderingPolicy", "Decoration output requires a collision profile, nonnegative draw distance and a decal screen size in (0, 1].");
+				return false;
+			}
 			if (!DeepLevelCityDecorationValidation::ValidateOutput(Placement.Output, Placement.Mesh,
 				Placement.ActorClass, Placement.DecalMaterial, Placement.DecalSize, OutError)) { return false; }
 		}
@@ -340,6 +374,7 @@ bool FDeepLevelCityDecorationResolver::Resolve(
 					Candidate.Placement.ActorClass = Entry.ActorClass;
 					Candidate.Placement.DecalMaterial = Entry.DecalMaterial;
 					Candidate.Placement.DecalSize = Entry.DecalSize;
+					Candidate.Placement.Rendering = Entry.Rendering;
 					Candidate.Placement.Transform = Entry.LocalTransform * Anchor.Transform;
 					Candidate.Placement.Tags = Anchor.Tags;
 					if (Category->CategoryTag.IsValid())
@@ -484,6 +519,7 @@ bool FDeepLevelCityDecorationResolver::Resolve(
 		Added.ActorClass = Entry->ActorClass;
 		Added.DecalMaterial = Entry->DecalMaterial;
 		Added.DecalSize = Entry->DecalSize;
+	Added.Rendering = Entry->Rendering;
 		Added.Transform = Override.TransformOffset * Entry->LocalTransform * Anchor->Transform;
 		Added.Tags = Anchor->Tags;
 		if (Category->CategoryTag.IsValid())
@@ -514,9 +550,15 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 	LastDirtyChunks.Reset();
 	LastPlacementCount = 0;
 	ADeepLevelCityLayoutActor* Layout = Cast<ADeepLevelCityLayoutActor>(GetOwner());
-	if (!Layout || !Layout->DecorationSet)
+	if (!Layout || !Layout->DecorationSet || !GetWorld())
 	{
 		OutError = LOCTEXT("MissingDecorationOwner", "City Decoration requires a City Layout owner and Decoration Set.");
+		LastGenerationError = OutError;
+		return false;
+	}
+	if (GetWorld()->IsGameWorld() && GetWorld()->GetWorldPartition())
+	{
+		OutError = LOCTEXT("PartitionedDecorationAuthoring", "Partitioned city decoration must be baked in the editor.");
 		LastGenerationError = OutError;
 		return false;
 	}
@@ -524,6 +566,17 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 	if (UWorld* World = GetWorld(); World && !World->IsGameWorld())
 	{
 		Layout->Modify();
+	}
+#endif
+	// Authoring references must not bind independent runtime streaming cells together.
+#if WITH_EDITOR
+	TArray<FWorldPartitionReference> LoadedChunks;
+	if (UWorldPartition* Partition = GetWorld()->GetWorldPartition())
+	{
+		for (const auto& Pair : MaterializedChunks)
+		{
+			if (Pair.Value.ActorGuid.IsValid()) LoadedChunks.Emplace(Partition, Pair.Value.ActorGuid);
+		}
 	}
 #endif
 	const TSharedPtr<const FDeepLevelCityLayoutSnapshot> Snapshot = Layout->GetSnapshot();
@@ -593,6 +646,32 @@ bool UDeepLevelCityDecorationComponent::Regenerate(const bool bForceAll, FText& 
 	return true;
 }
 
+#if WITH_EDITOR
+TArray<UActorComponent*> UDeepLevelCityDecorationComponent::GetGeneratedComponents() const
+{
+	TArray<UActorComponent*> Result;
+	for (const auto& Chunk : MaterializedChunks)
+	{
+		if (AActor* Actor = Chunk.Value.Actor.Get())
+		{
+			TInlineComponentArray<UActorComponent*> Components(Actor);
+			Result.Append(Components);
+		}
+	}
+	return Result;
+}
+
+TArray<AActor*> UDeepLevelCityDecorationComponent::GetGeneratedActors() const
+{
+	TArray<AActor*> Result;
+	for (const auto& Chunk : MaterializedChunks)
+	{
+		if (AActor* Actor = Chunk.Value.Actor.Get()) Result.Add(Actor);
+	}
+	return Result;
+}
+#endif
+
 void UDeepLevelCityDecorationComponent::RegenerateInEditor()
 {
 	FText Error;
@@ -613,17 +692,42 @@ void UDeepLevelCityDecorationComponent::ClearChunk(const FIntPoint& Chunk)
 	{
 		return;
 	}
-	for (UActorComponent* Component : Existing.Components)
+	if (AActor* Actor = Existing.Actor.Get())
 	{
-		if (Component)
-		{
-			if (AActor* Owner = GetOwner())
-			{
-				Owner->RemoveInstanceComponent(Component);
-			}
-			Component->DestroyComponent();
-		}
+#if WITH_EDITOR
+		if (!GetWorld()->IsGameWorld() && !Actor->ActorHasTag(OutputOwnerTag(*GetOwner()))) return;
+#endif
+		Actor->Modify();
+		Actor->GetWorld()->DestroyActor(Actor);
 	}
+}
+
+void UDeepLevelCityDecorationComponent::OnComponentDestroyed(const bool bDestroyingHierarchy)
+{
+	AActor* Owner = GetOwner();
+	UWorld* World = GetWorld();
+	// Unloading, GC and class reinstancing do not delete the persisted authoring output.
+	if (Owner && World && !World->bIsTearingDown && !IsGarbageCollecting() && Owner->IsActorBeingDestroyed())
+	{
+		bool bDeleteOutput = World->IsGameWorld() && !World->GetWorldPartition();
+#if WITH_EDITOR
+		bDeleteOutput |= !World->IsGameWorld() && Owner->GetPackage()->IsDirty()
+			&& !Owner->GetClass()->HasAnyClassFlags(CLASS_NewerVersionExists);
+#endif
+		if (!bDeleteOutput) { Super::OnComponentDestroyed(bDestroyingHierarchy); return; }
+#if WITH_EDITOR
+		TArray<FWorldPartitionReference> Loaded;
+		if (UWorldPartition* Partition = World->GetWorldPartition())
+		{
+			for (const auto& Pair : MaterializedChunks)
+				if (Pair.Value.ActorGuid.IsValid()) Loaded.Emplace(Partition, Pair.Value.ActorGuid);
+		}
+#endif
+		TArray<FIntPoint> Chunks;
+		MaterializedChunks.GetKeys(Chunks);
+		for (const FIntPoint& Chunk : Chunks) ClearChunk(Chunk);
+	}
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
 
 bool UDeepLevelCityDecorationComponent::MaterializeChunk(
@@ -644,7 +748,42 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 	}
 
 	FDeepLevelCityMaterializedChunk& Output = MaterializedChunks.FindOrAdd(Chunk);
-	TMap<FSoftObjectPath, UHierarchicalInstancedStaticMeshComponent*> MeshOutputs;
+	FActorSpawnParameters Params;
+	Params.OverrideLevel = Owner->GetLevel();
+	Params.ObjectFlags = World->IsGameWorld() ? RF_NoFlags : RF_Transactional;
+#if WITH_EDITOR
+	Params.bCreateActorPackage = !World->IsGameWorld();
+#endif
+	const auto* Layout = CastChecked<ADeepLevelCityLayoutActor>(Owner);
+	const FDeepLevelCityGrid& Grid = Layout->GetSnapshot()->GetGrid();
+	FVector Origin = Grid.CellToWorld(Chunk * Grid.ChunkSizeInCells);
+	Origin += FVector(1, 1, 0) * ((Grid.ChunkSizeInCells - 1) * Grid.TileSize * 0.5);
+	AActor* ChunkActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Origin), Params);
+	if (!ChunkActor)
+	{
+		OutError = LOCTEXT("ChunkSpawnFailed", "City Decoration could not create a spatial output actor.");
+		return false;
+	}
+	ChunkActor->SetCanBeDamaged(false);
+	Output.Actor = ChunkActor;
+#if WITH_EDITOR
+	Output.ActorGuid = ChunkActor->GetActorGuid();
+	ChunkActor->Tags.Add(OutputOwnerTag(*Owner));
+	ChunkActor->SetActorLabel(FString::Printf(TEXT("CityDecor_%d_%d"), Chunk.X, Chunk.Y));
+	ChunkActor->SetFolderPath(TEXT("City Decoration"));
+	ChunkActor->SetHLODLayer(Layout->DecorationHLODLayer);
+#endif
+	auto* Root = NewObject<USceneComponent>(ChunkActor, TEXT("DecorationRoot"), Params.ObjectFlags);
+	Root->CreationMethod = EComponentCreationMethod::Instance;
+	Root->SetMobility(EComponentMobility::Static);
+	ChunkActor->SetRootComponent(Root);
+	ChunkActor->AddInstanceComponent(Root);
+	Root->RegisterComponent();
+	Root->SetWorldLocation(Origin);
+	using FMeshKey = FDecorationMeshKey;
+	TMap<FMeshKey, UHierarchicalInstancedStaticMeshComponent*> MeshOutputs;
+	TMap<UHierarchicalInstancedStaticMeshComponent*, TArray<FTransform>> MeshInstances;
+	TMap<UHierarchicalInstancedStaticMeshComponent*, TArray<TArray<float>>> MeshData;
 	const EObjectFlags GeneratedFlags = World->IsGameWorld() ? RF_NoFlags : RF_Transactional;
 	for (const FDeepLevelCityResolvedDecoration& Placement : Placements)
 	{
@@ -656,18 +795,30 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 				OutError = LOCTEXT("InvalidDecorationMesh", "City Decoration contains an invalid mesh output.");
 				return false;
 			}
-			UHierarchicalInstancedStaticMeshComponent*& HISM = MeshOutputs.FindOrAdd(Placement.Mesh.ToSoftObjectPath());
+			UHierarchicalInstancedStaticMeshComponent*& HISM = MeshOutputs.FindOrAdd(FMeshKey{Placement.Mesh.ToSoftObjectPath(), Placement.MaterialOverride.ToSoftObjectPath(), Placement.Rendering, Placement.InstanceData.Num()});
 			if (!HISM)
 			{
-				HISM = NewObject<UHierarchicalInstancedStaticMeshComponent>(Owner, NAME_None, GeneratedFlags);
+				HISM = NewObject<UHierarchicalInstancedStaticMeshComponent>(ChunkActor, NAME_None, GeneratedFlags);
 				HISM->CreationMethod = EComponentCreationMethod::Instance;
+				HISM->SetMobility(EComponentMobility::Static);
 				HISM->SetStaticMesh(Mesh);
-				HISM->SetupAttachment(Owner->GetRootComponent());
-				Owner->AddInstanceComponent(HISM);
+                if (!Placement.MaterialOverride.IsNull())
+                {
+                    UMaterialInterface* Override = Placement.MaterialOverride.LoadSynchronous();
+                    if (!Override) { OutError = LOCTEXT("InvalidMeshMaterial", "Cannot load decoration material override."); return false; }
+                    for (int32 Slot = 0; Slot < HISM->GetNumMaterials(); ++Slot) HISM->SetMaterial(Slot, Override);
+                }
+				HISM->NumCustomDataFloats = Placement.InstanceData.Num();
+				HISM->SetCollisionProfileName(Placement.Rendering.CollisionProfile);
+				HISM->SetCanEverAffectNavigation(Placement.Rendering.bAffectNavigation);
+				HISM->SetCastShadow(Placement.Rendering.bCastShadow);
+				HISM->SetCullDistances(0, Placement.Rendering.MaxDrawDistance);
+				HISM->SetupAttachment(Root);
+				ChunkActor->AddInstanceComponent(HISM);
 				HISM->RegisterComponent();
-				Output.Components.Add(HISM);
 			}
-			HISM->AddInstance(Placement.Transform, true);
+			MeshInstances.FindOrAdd(HISM).Add(Placement.Transform);
+			MeshData.FindOrAdd(HISM).Add(Placement.InstanceData);
 			continue;
 		}
 		if (Placement.Output == EDeepLevelCityDecorationOutput::Actor)
@@ -678,11 +829,11 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 				OutError = LOCTEXT("InvalidDecorationActor", "City Decoration contains an invalid Actor output.");
 				return false;
 			}
-			UChildActorComponent* ChildActor = NewObject<UChildActorComponent>(Owner, NAME_None, GeneratedFlags);
+			UChildActorComponent* ChildActor = NewObject<UChildActorComponent>(ChunkActor, NAME_None, GeneratedFlags);
 			ChildActor->CreationMethod = EComponentCreationMethod::Instance;
 			ChildActor->SetChildActorClass(ActorClass);
-			ChildActor->SetupAttachment(Owner->GetRootComponent());
-			Owner->AddInstanceComponent(ChildActor);
+			ChildActor->SetupAttachment(Root);
+			ChunkActor->AddInstanceComponent(ChildActor);
 			ChildActor->RegisterComponent();
 			ChildActor->SetWorldTransform(Placement.Transform);
 			if (!ChildActor->GetChildActor())
@@ -691,7 +842,6 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 				ChildActor->DestroyComponent();
 				return false;
 			}
-			Output.Components.Add(ChildActor);
 			continue;
 		}
 
@@ -701,15 +851,25 @@ bool UDeepLevelCityDecorationComponent::MaterializeChunk(
 			OutError = LOCTEXT("InvalidDecorationDecal", "City Decoration contains an invalid Decal output.");
 			return false;
 		}
-		UDecalComponent* Decal = NewObject<UDecalComponent>(Owner, NAME_None, GeneratedFlags);
+		UDecalComponent* Decal = NewObject<UDecalComponent>(ChunkActor, NAME_None, GeneratedFlags);
 		Decal->CreationMethod = EComponentCreationMethod::Instance;
 		Decal->SetDecalMaterial(Material);
 		Decal->DecalSize = Placement.DecalSize;
-		Decal->SetupAttachment(Owner->GetRootComponent());
-		Owner->AddInstanceComponent(Decal);
+		Decal->SetFadeScreenSize(Placement.Rendering.DecalFadeScreenSize);
+		Decal->SetupAttachment(Root);
+		ChunkActor->AddInstanceComponent(Decal);
 		Decal->RegisterComponent();
 		Decal->SetWorldTransform(Placement.Transform);
-		Output.Components.Add(Decal);
+	}
+	for (const auto& Pair : MeshInstances)
+	{
+		Pair.Key->AddInstances(Pair.Value, false, true, true);
+        if (Pair.Key->NumCustomDataFloats > 0)
+        {
+            const auto& Data = MeshData.FindChecked(Pair.Key);
+            for (int32 Index = 0; Index < Data.Num(); ++Index) { Pair.Key->SetCustomData(Index, Data[Index], false); }
+            Pair.Key->MarkRenderStateDirty();
+        }
 	}
 	Output.ContentSignature = MakeChunkSignature(Placements);
 	return true;
